@@ -1,0 +1,1 @@
+wss://nexadesk-signaling.papayasds.workers.dev
