@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src ws: wss: __OTA_ORIGIN__; img-src 'self' data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>NexaDesk</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="brand"><span class="logo">◈</span> NexaDesk</div>
+    <nav>
+      <button data-tab="home" class="on">Remote Control</button>
+      <button data-tab="sec">Security</button>
+      <button data-tab="set">Settings</button>
+    </nav>
+    <div id="status" class="status"><i></i><span>Connecting…</span></div>
+  </aside>
+  <main>
+    <section id="tab-home">
+      <div class="grid">
+        <div class="card" id="hostCard">
+          <h2>Your Device</h2>
+          <div class="lbl">Your ID</div><div class="big" id="myId">— — —</div>
+          <div class="lbl">Password</div><div class="big sm" id="myPw">—</div>
+          <div class="row"><button id="copyId">Copy ID</button><button id="copyPw">Copy password</button><button id="regenPw">New password</button></div>
+          <p class="hint" id="hostHint">Share your ID and password with someone you trust. You will always see a prompt before they can view your screen (unless unattended access is on). For access while you are away, set a permanent password in Security and enable unattended access.</p>
+        </div>
+        <div class="card">
+          <h2>Control a Remote Device</h2>
+          <div class="lbl">Partner ID</div>
+          <input id="remId" inputmode="numeric" autocomplete="off" placeholder="000 000 000">
+          <div class="lbl">Password or invite code</div>
+          <input id="remPw" type="password" autocomplete="off" placeholder="••••••••••••">
+          <button class="primary" id="connectBtn">Connect securely</button>
+          <p class="hint">End-to-end encrypted. Works across any network (direct, STUN or TURN relay).</p>
+        </div>
+        <div class="card wide">
+          <h2>Saved PCs</h2>
+          <p class="hint">Saves the ID, and the password too if it is typed in the box (kept on this device only, so keep your phone locked). A saved password means one tap to connect (🔑). Do not save one-time invite codes.</p>
+          <div class="row"><button id="savePc">Save this PC</button></div>
+          <div id="savedPcs" class="list"></div>
+          <div class="lbl">Recent</div>
+          <div id="recentPcs" class="list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-sec" hidden>
+      <div class="grid">
+        <div class="card">
+          <h2>One-time invite code</h2>
+          <p class="hint">Single use, expires in 10 minutes. Safer than sharing your password.</p>
+          <div class="big sm" id="inviteCode">—</div>
+          <div class="row"><button id="newInvite" class="primary">Generate invite</button><button id="copyInvite">Copy</button></div>
+        </div>
+        <div class="card">
+          <h2>Access policy</h2>
+          <label class="chk"><input type="checkbox" id="optUnattended"> Unattended access (skip the approval prompt when the correct permanent password is used)</label>
+          <label class="chk"><input type="checkbox" id="optControl" checked> Allow remote control by default</label>
+          <label class="chk"><input type="checkbox" id="optClip" checked> Allow clipboard sharing by default</label>
+          <label class="chk" id="rowLockEnd"><input type="checkbox" id="optLockEnd"> Lock this PC when a remote session ends</label>
+          <p class="hint">With unattended access on, your password stays fixed so you can reconnect later. Use a strong one.</p>
+          <div class="lbl">Permanent password (unattended)</div>
+          <input id="permPw" type="password" placeholder="min 12 characters" autocomplete="new-password">
+          <button id="savePerm">Save permanent password</button>
+        </div>
+        <div class="card wide" id="adminControllerCard" hidden>
+          <h2>Elevated-window controllers</h2>
+          <p class="hint">Only NexaDesk controller IDs that a Windows administrator adds here can send input to elevated application windows. The host must still allow control for the session. Setup and roster changes require Windows administrator approval. Secure-desktop UAC prompts remain protected by Windows.</p>
+          <button id="manageAdminControllers">Manage admin controller IDs</button>
+        </div>
+        <div class="card wide">
+          <h2>Quick keys (phone)</h2>
+          <p class="hint">These buttons appear under the screen during a session.</p>
+          <div id="quickCfg" class="chkgrid"></div>
+        </div>
+        <div class="card wide">
+          <h2>Update log</h2>
+          <p class="hint">What this device did during the last update checks. Share it if an update fails.</p>
+          <pre id="updLogBox" class="hint" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre>
+        </div>
+        <div class="card wide">
+          <h2>Connection log</h2>
+          <div id="log" class="log"></div>
+          <button id="clearLog">Clear log</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-set" hidden>
+      <div class="card">
+        <h2>Server</h2>
+        <div id="relayInfo" class="hint"></div>
+        <div class="lbl">Signaling server URL</div>
+        <input id="srvUrl" placeholder="wss://remote.example.com">
+        <div class="lbl">Extra ICE/TURN servers (optional JSON array)</div>
+        <textarea id="extraIce" rows="3" placeholder='[{"urls":"turn:host:3478","username":"u","credential":"p"}]'></textarea>
+        <button class="primary" id="saveSet">Save &amp; reconnect</button>
+        <div class="lbl">Version</div><div id="verInfo"></div><div id="bundleInfo" class="hint"></div><div id="updBox" class="hint"></div><button id="chkUpd">Check for updates</button>
+        <label class="chk"><input type="checkbox" id="autoUpd"> Install updates automatically when this device is idle</label>
+        <p class="hint" id="updModeHint"></p>
+        <p class="hint">Exception: a release the publisher marks <b>FORCED</b> installs on every device after a short warning (30 s during a session, 5 s when idle), whatever this setting says.</p>
+        <div id="notesBox" class="hint"></div>
+        <button class="primary" id="installUpd" hidden>Install update</button>
+        <div id="nativeBox" class="hint"></div>
+        <button class="primary" id="installNative" hidden>Install app update</button>
+        <a id="apkLink" href="#" target="_blank" hidden></a>
+        <p class="hint">Use <b>wss://</b> (TLS) for internet use. Plain ws:// is for trusted LANs only.</p>
+      </div>
+      <div class="card" id="pcCard" hidden style="margin-top:20px">
+        <h2>This PC</h2>
+        <label class="chk"><input type="checkbox" id="optAwake"> Keep this PC awake while NexaDesk is running (so you can always reach it)</label>
+        <label class="chk"><input type="checkbox" id="optAutostart"> Start NexaDesk (minimized) when I sign in to Windows</label>
+        <label class="chk"><input type="checkbox" id="optTray"> Keep running in the system tray when I close the window (this PC stays reachable)</label>
+        <p class="hint">The screen may still turn off. Keeping the PC awake uses more power on a laptop.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="banner" hidden>
+  <span>● Your screen is being shared with <b id="bnId"></b></span>
+  <label><input type="checkbox" id="bnCtl"> allow control</label>
+  <button id="bnStop">Disconnect</button>
+</div>
+
+<div id="session" hidden>
+  <div class="bar">
+    <span id="sesInfo">Connecting…</span>
+    <span class="sp"></span>
+    <label class="sens">Speed <input id="sens" type="range" min="1" max="6" step="0.5"></label>
+    <label class="sens">Quality <select id="quality"><option value="auto">Auto</option><option value="smooth">Smooth</option><option value="sharp">Sharp</option><option value="lowdata">Low data</option></select></label>
+    <button id="btnKbd">Keyboard</button>
+    <button id="btnClip">Send clipboard</button>
+    <button id="btnPcClip">Get PC clipboard</button>
+    <button id="btnAutoClip" title="Copy text on one device and paste on the other automatically">Auto clipboard: off</button>
+    <button id="btnSwitch">Switch PC</button>
+    <button id="btnFit">Fit/100%</button>
+    <button id="btnZoom" title="Reset zoom (pinch the screen to zoom)">100%</button>
+    <button id="btnFs">Fullscreen</button>
+    <button id="btnEnd" class="danger">End</button>
+  </div>
+  <div class="stage"><video id="vid" autoplay playsinline muted tabindex="0"></video></div>
+  <button id="tbToggle" class="fab" aria-label="Show or hide controls" aria-expanded="false">&#9776;</button>
+  <div class="padbar" id="padBar" hidden>
+    <button id="tpLeft">Left click</button>
+    <button id="tpHold">Hold / drag</button>
+    <button id="tpRight">Right click</button>
+    <button id="tpKeys">Keys</button>
+    <div class="quickbar" id="quickBar"></div>
+    <div class="keysbar" id="keysBar" hidden>
+      <button data-combo="ctrl-shift-esc">Task Manager</button>
+      <button data-combo="alt-tab">Alt+Tab</button>
+      <button data-combo="win">Windows key</button>
+      <button data-combo="win-l">Lock PC</button>
+      <button data-combo="win-d">Show desktop</button>
+      <button data-combo="alt-f4">Alt+F4</button>
+      <button data-combo="esc">Esc</button>
+      <button data-combo="printscreen">Print Screen</button>
+    </div>
+    <div class="modbar" id="modBar">
+      <button data-mod="17">Ctrl</button><button data-mod="18">Alt</button><button data-mod="16">Shift</button><button data-mod="91">Win</button><button id="fnToggle">F1-12</button>
+    </div>
+    <div class="keyrow" id="keyRow"></div>
+    <div class="keyrow" id="fnRow" hidden></div>
+    <div class="tphint">Drag anywhere on the screen = move &middot; Tap = click &middot; Tap twice and drag = drag &middot; Two fingers = scroll &middot; Pinch = zoom, then two fingers = pan &middot; Two-finger tap or press-and-hold = right click</div>
+  </div>
+  <input id="kbd" class="kbd" autocomplete="off" autocapitalize="off" spellcheck="false">
+</div>
+
+<div id="modal" hidden><div class="box">
+  <h3>Remote access request</h3>
+  <p><b id="mdId"></b> wants to view your screen.</p>
+  <label class="chk"><input type="checkbox" id="mdCtl" checked> Allow mouse &amp; keyboard control</label>
+  <label class="chk"><input type="checkbox" id="mdClip" checked> Allow clipboard</label>
+  <div class="row"><button id="mdNo">Deny</button><button id="mdYes" class="primary">Allow</button></div>
+</div></div>
+<div id="toast"></div>
+<div id="updDock"><div id="updProg" class="prog" hidden><div id="updMsg"></div><a id="updApk" href="#" target="_blank" hidden>Download &amp; install the app update</a><div class="progTop"><span id="progLbl"></span><span id="progPct"></span></div><div class="progBar"><div id="progFill"></div></div><div class="progSub"><span id="progSize"></span><span id="progSpeed"></span></div></div></div>
+<script src="config.js"></script>
+<script src="update-keys.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

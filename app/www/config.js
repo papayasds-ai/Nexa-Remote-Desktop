@@ -1,0 +1,1 @@
+window.NEXA_DEFAULT_SERVER = '';

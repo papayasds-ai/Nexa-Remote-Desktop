@@ -1,0 +1,23 @@
+# NEVER commit these (secrets / keys / build output)
+signing/
+server/.server-secret
+server/config.json
+server-url.txt
+node_modules/
+dist/
+output/
+android-app/android/
+android-app/www/
+desktop/www/
+cloudflare/.wrangler/
+cloudflare/.dev.vars
+*.jks
+*.keystore
+build/
+notify-token.txt
+desktop/build-config.json
+desktop/build/
+desktop/inputbroker/build/
+desktop/inputbroker/dist/
+
+logs/

@@ -1,0 +1,9 @@
+{
+  "name": "nexadesk-server",
+  "version": "1.0.0",
+  "description": "NexaDesk signaling server (blind relay: never sees screen data or passwords)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" },
+  "license": "MIT"
+}

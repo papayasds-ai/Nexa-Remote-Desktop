@@ -1,0 +1,17 @@
+﻿{
+    "android":  {
+                    "allowMixedContent":  false
+                },
+    "plugins":  {
+                    "CapacitorUpdater":  {
+                                             "autoUpdate":  false
+                                         }
+                },
+    "appName":  "NexaDesk",
+    "server":  {
+                   "androidScheme":  "https",
+                   "cleartext":  false
+               },
+    "webDir":  "www",
+    "appId":  "com.nexadesk.app"
+}

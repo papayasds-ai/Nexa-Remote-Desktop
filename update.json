@@ -1,0 +1,27 @@
+{
+  "version": "1.0.93",
+  "bundle": "www-1.0.93.zip",
+  "sha256": "8d88b70631de5c2f998015c1807a444dbff2bc919ea9f3092daf0554b0ef85fe",
+  "server": "wss://nexadesk-signaling.papayasds.workers.dev",
+  "released": "2026-11-13T23:14:33.4675883Z",
+  "trust": [
+    "d90ea841dfdb9803",
+    "047d1bba55ce3069"
+  ],
+  "keyId": "",
+  "force": true,
+  "notes": "Fixed Windows input broker startup and session cleanup. Updated Windows Setup, Portable, and Android app.",
+  "native": {
+    "version": "1.0.93",
+    "windows": {
+      "version": "1.0.93",
+      "url": "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.93.exe",
+      "sha256": "f9efbb5559fa38d44a4d6e1cac5b92e14dddaafb0dc1aa015926f63946ac330a"
+    },
+    "android": {
+      "version": "1.0.93",
+      "url": "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-1.0.93.apk",
+      "sha256": "4fbeb9c25fbb24f1de45028195f3b37c8107262118d75fc593a99b759572779b"
+    }
+  }
+}

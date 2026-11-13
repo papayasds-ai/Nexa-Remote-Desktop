@@ -1,0 +1,20 @@
+# docker compose up -d   (copy .env.example to .env and set TURN_SECRET first; put a TLS reverse proxy such as Caddy in front of port 8080)
+services:
+  signaling:
+    image: node:20-alpine
+    working_dir: /app
+    volumes: ["../:/app"]
+    command: sh -c "npm install --omit=dev && node server.js"
+    ports: ["8080:8080"]
+    restart: unless-stopped
+  coturn:
+    image: coturn/coturn:latest
+    network_mode: host            # required: relay ports must keep their real public mapping (UDP 3478/5349 + TCP 3478/5349 + 49152-50151/udp)
+    environment:
+      TURN_SECRET: ${TURN_SECRET:?set TURN_SECRET in .env}
+      EXTERNAL_IP: ${EXTERNAL_IP:-}   # leave empty = auto-detect at every start (dynamic IPs)
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./coturn-entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    restart: unless-stopped

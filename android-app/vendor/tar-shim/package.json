@@ -1,0 +1,8 @@
+{
+  "name": "tar",
+  "version": "7.5.22",
+  "private": true,
+  "description": "Local shim: gives Capacitor CLI the CommonJS shape it expects, backed by maintained tar v7.",
+  "main": "index.js",
+  "dependencies": { "tar-v7": "npm:tar@^7.5.22" }
+}

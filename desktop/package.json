@@ -1,0 +1,94 @@
+{
+  "name": "nexadesk",
+  "productName": "NexaDesk",
+  "version": "1.0.93",
+  "description": "NexaDesk secure remote desktop",
+  "author": "NexaDesk",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.nexadesk.desktop",
+    "productName": "NexaDesk",
+    "asar": true,
+    "compression": "store",
+    "electronLanguages": [
+      "en-US"
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "www/**",
+      "build-config.json"
+    ],
+    "extraResources": [
+      {
+        "from": "inputhelper.ps1",
+        "to": "inputhelper.ps1"
+      },
+      {
+        "from": "icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "icon-256.png",
+        "to": "icon-256.png"
+      },
+      {
+        "from": "inputbroker/dist",
+        "to": "inputbroker",
+        "filter": [
+          "NexaDeskInputBroker-*.exe"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "requestedExecutionLevel": "asInvoker",
+      "icon": "icon.ico"
+    },
+    "portable": {
+      "artifactName": "NexaDesk-Portable-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "include": "build/installer.nsh",
+      "artifactName": "NexaDesk-Setup-${version}.exe"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "toolsets": {
+      "nsis": "1.2.1"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://updates.invalid/nexadesk"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/papayasds-ai/Nexa-Remote-Desktop.git"
+  },
+  "overrides": {
+    "@electron/asar": "^4.3.1",
+    "rimraf": "^6.0.1",
+    "roarr": "^7.21.7",
+    "global-agent": "^4.1.6",
+    "glob": "^14.0.3",
+    "tar": "^7.5.22"
+  }
+}
