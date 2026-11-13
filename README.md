@@ -23,7 +23,7 @@ Components
 1. Install Node.js 22.12+ LTS (the build tools need it), Git for Windows, and (for the APK) JDK 17 + Android Studio SDK with `ANDROID_HOME` set.
 2. Double-click `START-HERE.bat` -> **2) AUTO full**. First run it logs in to Cloudflare (browser), creates the server, builds
    `output\NexaDesk-Setup.exe` + `NexaDesk.apk`, pushes to GitHub (a sign-in window may appear once) and pings devices.
-3. Install the Windows Setup and approve its administrator prompt to install the machine-wide input service; Portable does not install that service. Install the APK on Android. ID and password are ready immediately.
+3. Run the Windows Setup with an account that can elevate to install the machine-wide input service; whether Windows shows a UAC prompt follows that PC's local policy. Portable does not install the service. Install the APK on Android. ID and password are ready immediately.
 4. Later: **1) AUTO quick** for UI/logic changes (no rebuild, all devices update in seconds), **2) AUTO full** when native parts change, **3) MANUAL** to choose the version number yourself.
 
 ## Hosting the server on Cloudflare (no VPS needed)
@@ -99,8 +99,8 @@ Everything is published from **START-HERE.bat**. Every update is described by th
 - **Hands-free auto-release** (menu 4 on / 5 off): every 10 minutes the PC checks the project. `app\www` changed -> quick update; `desktop\` changed -> full update. Version number automatic, forced. Log: `build\auto-release.log`.
 - **R) Recovery key**: quick update signed with the offline recovery key, only if the daily key is lost.
 - **Why "three modes"?** They are not three update systems but what a device can do: **Forced** (the release is marked forced), **Automatic** (Settings > Version > *Install updates automatically*, on by default: installs when idle) and **Manual** (that setting off: the update is downloaded and waits for the *Install update* button). Forced always wins; nothing ever interrupts a live session except a forced update after its warning.
-- **Native packages:** the Windows app downloads the new Setup from your release host and checks its SHA-256 before starting it. Setup requires Windows administrator approval because it installs the machine-wide input service. Android cannot install an APK silently, so the app shows a download link.
-- **Elevated input service:** Setup installs the LocalSystem input broker under Program Files and registers it as an automatic Windows service. Windows administrator approval is required during Setup and whenever a Windows administrator opens the controller allowlist editor. After installation, allowlisted remote input does not prompt for UAC; ordinary controllers cannot use the elevated pipe. Updating the native Windows package still requires Windows' installer elevation approval. Portable builds do not install the service.
+- **Native packages:** the Windows app downloads the new Setup from your release host and checks its SHA-256 before starting it. Setup requires administrator-level elevation because it installs the machine-wide input service. Windows shows a UAC prompt according to local policy. Android cannot install an APK silently, so the app shows a download link.
+- **Elevated input service:** Setup installs the LocalSystem input broker under Program Files and registers it as an automatic Windows service. Opening the controller allowlist editor and updating the native Windows package also require administrator-level elevation; UAC prompts follow Windows policy. After installation, allowlisted remote input does not prompt for UAC; ordinary controllers cannot use the elevated pipe. Portable builds do not install the service.
 - Setup builds use `compression: store` and keep only the English locale, so Portable starts faster; Portable still unpacks to `%TEMP%\NexaDeskPortable` on every launch (exclude that folder in Defender, or use the Setup / unpacked ZIP).
 
 ## Security review (what was checked)

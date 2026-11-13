@@ -62,30 +62,66 @@ Sync-Path
 # gh.exe (GitHub CLI) with stderr captured; returns its exit code. Output is kept in $script:ghOut.
 function Invoke-Gh { $ErrorActionPreference = 'Continue'; $script:ghOut = & gh.exe @args 2>&1; return $LASTEXITCODE }
 
-# Uploads one file to the 'ota' release and shows a live progress bar + speed. The percentage is measured from the PC's network upload counter
-# (gh itself prints nothing when its output is not a terminal), so it is approximate; the speed number tells you if it is slow (a few MB/s) or stuck (~0).
+# Uploads one file to the 'ota' release through GitHub's release-assets API and reports bytes read from the exact file.
 function Send-GhAsset([string]$file, [string]$repo) {
   $size = (Get-Item $file).Length; $name = Split-Path $file -Leaf
-  $gh = (Get-Command gh.exe).Source
-  $nics = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object { $_.OperationalStatus -eq 'Up' -and $_.NetworkInterfaceType -ne 'Loopback' })
-  $sent = { $t = 0; foreach ($n in $nics) { try { $t += $n.GetIPv4Statistics().BytesSent } catch { } }; $t }
-  $base = & $sent; $last = $base; $t0 = Get-Date; $lastT = $t0; $lastPrint = $t0; $slowSince = $null
-  $p = Start-Process -FilePath $gh -ArgumentList @('release', 'upload', 'ota', '--repo', $repo, '--clobber', ('"' + $file + '"')) -NoNewWindow -PassThru
-  $null = $p.Handle
-  while (-not $p.HasExited) {
-    Start-Sleep -Seconds 2
-    $now = & $sent; $t = Get-Date
-    $speed = ($now - $last) / [math]::Max(0.5, ($t - $lastT).TotalSeconds); $last = $now; $lastT = $t
-    $done = [math]::Max(0, $now - $base); $pct = [math]::Min(99, [int](100 * $done / $size))
-    $el = [int]($t - $t0).TotalSeconds
-    $mbps = [math]::Round($speed / 1MB, 2)
-    if ($speed -lt 20KB) { if (-not $slowSince) { $slowSince = $t } } else { $slowSince = $null }
-    $state = if ($slowSince -and ($t - $slowSince).TotalSeconds -gt 45) { 'NO DATA FLOWING for ' + [int]($t - $slowSince).TotalSeconds + 's - looks stuck (check internet / gh auth)' } else { "$mbps MB/s" }
-    Write-Progress -Activity "Uploading $name ($([math]::Round($size / 1MB, 1)) MB)" -Status "$pct%   $state   elapsed ${el}s" -PercentComplete $pct
-    if (($t - $lastPrint).TotalSeconds -ge 15) { $lastPrint = $t; Write-Host "    $name  ~$pct%  $state  (${el}s)" -ForegroundColor $(if ($state -like 'NO DATA*') { 'Red' } else { 'DarkGray' }) }
+  $releaseText = @(& gh api "repos/$repo/releases/tags/ota") -join "`n"
+  if ($LASTEXITCODE) { Write-Host "Could not read GitHub release 'ota': $releaseText" -ForegroundColor Red; return 1 }
+  $release = $releaseText | ConvertFrom-Json
+  $token = (& gh auth token 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -or -not $token) { Write-Host 'GitHub authentication token is unavailable.' -ForegroundColor Red; return 1 }
+  $assetsText = @(& gh api "repos/$repo/releases/$($release.id)/assets?per_page=100") -join "`n"
+  if ($LASTEXITCODE) { Write-Host "Could not inspect existing GitHub assets: $assetsText" -ForegroundColor Red; return 1 }
+  $existing = @($assetsText | ConvertFrom-Json | Where-Object { $_.name -eq $name })
+  if ($existing) {
+    if ((Invoke-Gh release delete-asset ota $name --repo $repo --yes) -ne 0) { Write-Host "Could not replace existing asset ${name}: $script:ghOut" -ForegroundColor Red; return 1 }
   }
-  Write-Progress -Activity "Uploading $name" -Completed
-  return $p.ExitCode
+  $stream = $null; $content = $null; $request = $null; $response = $null; $client = $null
+  try {
+    Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+    $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromHours(3)
+    $url = "https://uploads.github.com/repos/$repo/releases/$($release.id)/assets?name=$([Uri]::EscapeDataString($name))"
+    $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $url)
+    $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
+    $request.Headers.Accept.ParseAdd('application/vnd.github+json')
+    $request.Headers.Add('X-GitHub-Api-Version', '2026-03-10')
+    $stream = [IO.File]::OpenRead($file)
+    $content = [System.Net.Http.StreamContent]::new($stream)
+    $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/octet-stream')
+    $request.Content = $content
+    $task = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
+    $sent = 0L; $last = 0L; $lastTime = Get-Date; $lastPrint = $lastTime; $start = $lastTime
+    while (-not $task.IsCompleted) {
+      Start-Sleep -Seconds 2
+      $now = Get-Date; $sent = $stream.Position
+      $pct = [math]::Min(99, [int](100 * $sent / [math]::Max(1, $size)))
+      $speed = ($sent - $last) / [math]::Max(0.5, ($now - $lastTime).TotalSeconds)
+      $elapsed = [int]($now - $start).TotalSeconds
+      $state = if ($sent -ge $size) { 'waiting for GitHub confirmation' } else { "$( [math]::Round($speed / 1MB, 2) ) MB/s" }
+      Write-Progress -Activity "Uploading $name ($([math]::Round($size / 1MB, 1)) MB)" -Status "$pct%   $state   elapsed ${elapsed}s" -PercentComplete $pct
+      if (($now - $lastPrint).TotalSeconds -ge 15) { $lastPrint = $now; Write-Host "    $name  $pct%  $state  (${elapsed}s)" -ForegroundColor DarkGray }
+      $last = $sent; $lastTime = $now
+    }
+    $response = $task.GetAwaiter().GetResult()
+    $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    if (-not $response.IsSuccessStatusCode) { throw "GitHub returned HTTP $([int]$response.StatusCode): $body" }
+    $asset = $body | ConvertFrom-Json
+    $expected = 'sha256:' + (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+    if ($asset.name -ne $name -or $asset.size -ne $size -or ($asset.digest -and $asset.digest -ne $expected)) { throw 'Uploaded asset name, size, or checksum does not match the local file.' }
+    Write-Progress -Activity "Uploading $name" -Completed
+    Write-Host "    $name uploaded and checksum verified." -ForegroundColor Green
+    return 0
+  } catch {
+    Write-Progress -Activity "Uploading $name" -Completed
+    Write-Host "Upload of ${name} failed: $($_.Exception.Message)" -ForegroundColor Red
+    return 1
+  } finally {
+    if ($response) { $response.Dispose() }
+    if ($request) { $request.Dispose() }
+    if ($content) { $content.Dispose() } elseif ($stream) { $stream.Dispose() }
+    if ($client) { $client.Dispose() }
+  }
 }
 
 # Updates the GitHub release 'ota' IN PLACE. The release and its tag are NEVER deleted.
@@ -123,7 +159,16 @@ function Publish-OtaRelease([string]$ver, [string]$sha, [string]$outDir, [string
   if ((Invoke-Gh auth status -h github.com) -ne 0) { throw "GitHub authentication is invalid. Run 'gh auth login -h github.com' and retry." }
   $keep = @($files | ForEach-Object { Split-Path $_ -Leaf })
   $exists = ((Invoke-Gh release view ota --repo $repo) -eq 0)
-  $notes = "NexaDesk OTA v$ver`n`n" + (($bins | ForEach-Object { Split-Path $_.FullName -Leaf }) -join "`n") + "`n`nWindows Setup installs the machine-wide input service and requires Windows administrator approval. Portable runs without installing that service. The Android APK is signed for existing NexaDesk installs."
+  $remoteAssets = @{}
+  if ($exists -and -not $DryRun) {
+    $releaseJson = @(& gh api "repos/$repo/releases/tags/ota") -join "`n"
+    if ($LASTEXITCODE) { throw "Could not inspect GitHub 'ota' release: $releaseJson" }
+    $releaseInfo = $releaseJson | ConvertFrom-Json
+    $assetsJson = @(& gh api "repos/$repo/releases/$($releaseInfo.id)/assets?per_page=100") -join "`n"
+    if ($LASTEXITCODE) { throw "Could not inspect current release assets: $assetsJson" }
+    foreach ($asset in @($assetsJson | ConvertFrom-Json)) { $remoteAssets[$asset.name] = $asset }
+  }
+  $notes = "NexaDesk OTA v$ver`n`n" + (($bins | ForEach-Object { Split-Path $_.FullName -Leaf }) -join "`n") + "`n`nWindows Setup installs the machine-wide input service and requires administrator-level elevation; UAC prompts follow local Windows policy. Portable runs without installing that service. The Android APK is signed for existing NexaDesk installs."
   if ($DryRun) {
     Write-Host "[dry-run] release 'ota' exists: $exists (it is never deleted)" -ForegroundColor Cyan
     Write-Host "[dry-run] would upload (--clobber): $($keep -join ', ')" -ForegroundColor Cyan
@@ -138,17 +183,25 @@ function Publish-OtaRelease([string]$ver, [string]$sha, [string]$outDir, [string
   } elseif ($bins.Count -gt 0) {
     [void](Invoke-Gh release edit ota --repo $repo --title "NexaDesk v$ver" --notes $notes)   # cosmetic: a failure here is not fatal
   }
-  # one file at a time, smallest first, with gh's own progress visible (it used to be captured silently, so a ~400 MB upload looked like a hang)
+  # one file at a time, smallest first; skip assets that GitHub already stores with the exact SHA-256.
   $upOk = $true
   foreach ($f in @($files | Sort-Object { (Get-Item $_).Length })) {
-    $mb = [math]::Round((Get-Item $f).Length / 1MB, 1)
-    Write-Host "  uploading $(Split-Path $f -Leaf) ($mb MB) - big files take a few minutes, this is normal..." -ForegroundColor Cyan
+    $item = Get-Item $f; $name = $item.Name
+    $digest = 'sha256:' + (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+    $remote = $remoteAssets[$name]
+    if ($remote -and $remote.size -eq $item.Length -and $remote.digest -eq $digest) {
+      Write-Host "  $name is already uploaded and SHA-256 verified." -ForegroundColor DarkGray
+      continue
+    }
+    $mb = [math]::Round($item.Length / 1MB, 1)
+    Write-Host "  uploading $name ($mb MB)..." -ForegroundColor Cyan
     $code = 1
     for ($try = 1; $try -le 3 -and $code; $try++) {   # GitHub drops slow uploads with HTTP 408: retry the same file (--clobber replaces a half-uploaded one)
-      if ($try -gt 1) { Write-Host "  retry $try of 3 for $(Split-Path $f -Leaf) ..." -ForegroundColor Yellow; Start-Sleep -Seconds 5 }
+      if ($try -gt 1) { Write-Host "  retry $try of 3 for $name ..." -ForegroundColor Yellow; Start-Sleep -Seconds 5 }
       $code = Send-GhAsset $f $repo
     }
-    if ($code) { Write-Host "  upload of $(Split-Path $f -Leaf) FAILED (exit $code). The release and its old files were left untouched. Run again to retry." -ForegroundColor Red; $upOk = $false; break }
+    if ($code) { Write-Host "  upload of $name FAILED (exit $code). Run again to retry." -ForegroundColor Red; $upOk = $false; break }
+    $remoteAssets[$name] = [pscustomobject]@{ name = $name; size = $item.Length; digest = $digest }
   }
   if (-not $upOk) { return }
   if ((Invoke-Gh release view ota --repo $repo --json assets --jq '.assets[].name') -eq 0) {

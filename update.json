@@ -1,9 +1,9 @@
 {
   "version": "1.0.93",
   "bundle": "www-1.0.93.zip",
-  "sha256": "8d88b70631de5c2f998015c1807a444dbff2bc919ea9f3092daf0554b0ef85fe",
+  "sha256": "283b17d961e82c73c84d3ff8c13f69c5af35a1925fe531cd091c6c95cbf8cdb6",
   "server": "wss://nexadesk-signaling.papayasds.workers.dev",
-  "released": "2026-11-13T23:14:33.4675883Z",
+  "released": "2026-11-13T23:45:07.9968723Z",
   "trust": [
     "d90ea841dfdb9803",
     "047d1bba55ce3069"

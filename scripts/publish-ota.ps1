@@ -96,6 +96,10 @@ if (Test-Path $sigPath) { Copy-Item $sigPath $clone -Force }
 $skip = @('.git', 'node_modules', 'build', 'output', 'signing', '.wrangler', '.cache-electron-builder', '.cache-local', '.npm-cache', '.gradle-home', '.android-home', '.tmp', 'logs') + @('desktop\www', 'desktop\dist', 'desktop\build', 'desktop\inputbroker\build', 'desktop\inputbroker\dist', 'android-app\www', 'android-app\android', 'ota' | ForEach-Object { Join-Path $root $_ })
 robocopy $root $clone /E /XD @skip /XF .server-secret server-url.txt notify-token.txt config.json keystore-password.txt *.jks *.keystore *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'Copying source files failed' }
+$repoPub = Join-Path $clone 'cloudflare\public'; New-Item -ItemType Directory -Force $repoPub | Out-Null
+Get-ChildItem $repoPub -File | Where-Object { $_.Name -ne 'robots.txt' } | Remove-Item -Force
+Copy-Item @($zip, $manifestPath, $sig2Path) $repoPub -Force
+if (Test-Path $sigPath) { Copy-Item $sigPath $repoPub -Force }
 # mirror: files you deleted from the project are removed, but keep the root OTA artifacts managed above
 Push-Location $clone
 try {
