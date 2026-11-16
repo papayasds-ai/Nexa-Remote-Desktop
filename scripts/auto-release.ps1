@@ -47,3 +47,4 @@ try {
   $combined | Set-Content $failStamp -Encoding ASCII
   Log ('release failed: ' + $_.Exception.Message); exit 1
 } finally { Remove-Item $lock -Force -ErrorAction SilentlyContinue }
+exit 0

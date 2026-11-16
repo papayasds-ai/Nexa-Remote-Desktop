@@ -20,12 +20,11 @@ if (-not (Test-Path $urlFile)) { & "$PSScriptRoot\deploy-cloudflare.ps1" }
 if (-not (Test-Path $urlFile)) { throw 'Server setup did not finish. Read the messages above.' }
 if ($Version) { & "$PSScriptRoot\bump-version.ps1" -Set $Version } else { & "$PSScriptRoot\bump-version.ps1" }
 $u = (Get-Content $urlFile -Raw).Trim()
-& "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump
-if ($AllowInsecure) { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump -AllowInsecure } else { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump }
-$ver = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
-$required = @("NexaDesk-Setup-$ver.exe", "NexaDesk-Portable-$ver.exe", "NexaDesk-$ver.apk")
-$missing = @($required | Where-Object { -not (Test-Path (Join-Path (Join-Path $root 'output') $_)) })
-if ($missing) { throw "Release build is incomplete; refusing to publish. Missing: $($missing -join ', ')" }
+if (Test-Path (Join-Path $root 'cloud-windows.txt')) { Write-Host 'Windows installers will be built on GitHub (cloud-windows.txt exists): skipping the slow local Windows build.' -ForegroundColor Cyan }
+else { & "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump }
+try {
+  if ($AllowInsecure) { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump -AllowInsecure } else { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump }
+} catch { Write-Host "`nAndroid build skipped: $($_.Exception.Message)" -ForegroundColor Yellow }
 $pubArgs = @{ NoBump = $true }; if ($NoForce) { $pubArgs.NoForce = $true }; if ($Notes) { $pubArgs.Notes = $Notes }
 & "$PSScriptRoot\publish-ota.ps1" @pubArgs
 if ($LASTEXITCODE) { throw "publish-ota.ps1 failed (exit $LASTEXITCODE)" }

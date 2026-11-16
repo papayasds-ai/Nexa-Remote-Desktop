@@ -1,7 +1,7 @@
 {
   "name": "nexadesk",
   "productName": "NexaDesk",
-  "version": "1.0.93",
+  "version": "1.0.30",
   "description": "NexaDesk secure remote desktop",
   "author": "NexaDesk",
   "main": "main.js",
@@ -39,13 +39,6 @@
       {
         "from": "icon-256.png",
         "to": "icon-256.png"
-      },
-      {
-        "from": "inputbroker/dist",
-        "to": "inputbroker",
-        "filter": [
-          "NexaDeskInputBroker-*.exe"
-        ]
       }
     ],
     "win": {
@@ -56,21 +49,16 @@
       "requestedExecutionLevel": "asInvoker",
       "icon": "icon.ico"
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "NexaDesk-Setup-${version}.exe"
+    },
     "portable": {
       "artifactName": "NexaDesk-Portable-${version}.exe"
     },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": true,
-      "allowElevation": true,
-      "include": "build/installer.nsh",
-      "artifactName": "NexaDesk-Setup-${version}.exe"
-    },
     "directories": {
       "output": "dist"
-    },
-    "toolsets": {
-      "nsis": "1.2.1"
     },
     "publish": [
       {

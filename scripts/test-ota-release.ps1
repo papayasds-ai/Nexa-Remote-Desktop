@@ -1,5 +1,5 @@
 # Safe check of the GitHub 'ota' release logic: prints what WOULD be uploaded/deleted. Changes nothing, deletes nothing.
-#   powershell -File scripts\test-ota-release.ps1
+#   powershell -File scripts\test-ota-release.ps1            (then: node scripts\check-release.js)
 . "$PSScriptRoot\common.ps1"
 $root = Split-Path $PSScriptRoot -Parent
 $ver = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()

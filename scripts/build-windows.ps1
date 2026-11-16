@@ -14,9 +14,6 @@ if ($ServerUrl -and $ServerUrl -notmatch '^wss?://') { throw 'Server URL must st
 if (-not $NoBump) { & "$PSScriptRoot\bump-version.ps1" }
 $ver = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 
-$brokerName = "NexaDeskInputBroker-$ver.exe"
-& "$PSScriptRoot\build-input-broker.ps1" -Version $ver
-
 $desk = Join-Path $root 'desktop'
 Remove-Item (Join-Path $desk 'www') -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $root 'app\www') (Join-Path $desk 'www') -Recurse
@@ -25,25 +22,8 @@ $origin = ($ServerUrl -replace '^wss://', 'https://' -replace '^ws://', 'http://
 $idx = Join-Path $desk 'www\index.html'; [IO.File]::WriteAllText($idx, [IO.File]::ReadAllText($idx).Replace('__OTA_ORIGIN__', $origin), (New-Object Text.UTF8Encoding $false))
 $prefix = if ($origin -match '^https://') { "$origin/" } else { '' }
 $relFile = Join-Path $root 'release-host.txt'
-$relPrefix = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim().TrimEnd('/') + '/' } else { '' }
-[IO.File]::WriteAllText((Join-Path $desk 'build-config.json'), (@{ otaPrefix = $prefix; releasePrefix = $relPrefix; inputBrokerName = $brokerName } | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
-$installerInclude = @"
-!macro customInstall
-  ExecWait '"`$INSTDIR\resources\inputbroker\$brokerName" --install-service "`$INSTDIR\resources\inputbroker\$brokerName" "`$INSTDIR\`${APP_EXECUTABLE_FILENAME}"' `$R0
-  `${If} `$R0 != 0
-    MessageBox MB_ICONSTOP|MB_OK "NexaDesk could not install or start its elevated input service (exit `$R0). Setup will stop."
-    Abort "Could not install NexaDesk elevated input service."
-  `${EndIf}
-!macroend
-
-!macro customUnInstall
-  `${IfNot} `${isUpdated}
-    ExecWait '"`$INSTDIR\resources\inputbroker\$brokerName" --uninstall-service' `$R1
-  `${EndIf}
-!macroend
-"@
-$buildDir = Join-Path $desk 'build'; New-Item -ItemType Directory -Force $buildDir | Out-Null
-[IO.File]::WriteAllText((Join-Path $buildDir 'installer.nsh'), $installerInclude, (New-Object Text.UTF8Encoding $false))
+$relPrefix = (Get-ReleaseHost $root).TrimEnd('/') + '/'   # trusted installer host baked into THIS build: release-host.txt, otherwise the GitHub release 'ota' (an empty value here made the app refuse every app-package update)
+[IO.File]::WriteAllText((Join-Path $desk 'build-config.json'), (@{ otaPrefix = $prefix; releasePrefix = $relPrefix } | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
 
 Push-Location $desk
 try {
@@ -60,8 +40,7 @@ try {
   npm run dist
   if ($LASTEXITCODE) { throw 'electron-builder failed' }
   $out = Join-Path $root 'output'; New-Item -ItemType Directory -Force $out | Out-Null
-  Get-ChildItem $out -Filter "NexaDesk-Setup-$ver.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
-  Get-ChildItem $out -Filter "NexaDesk-Portable-$ver.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
+  Get-ChildItem $out -Filter 'NexaDesk*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force   # previous builds
   $setup = Get-ChildItem dist -Filter 'NexaDesk-Setup-*.exe' | Select-Object -First 1
   $port  = Get-ChildItem dist -Filter 'NexaDesk-Portable-*.exe' | Select-Object -First 1
   $copies = @()

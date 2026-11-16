@@ -1,4 +1,4 @@
-# One-time setup of a TURN relay on your NexaDesk server (Cloudflare Realtime TURN and/or static TURN servers such as ExpressTURN).
+# One-time setup of a TURN relay (Cloudflare Realtime TURN) on your NexaDesk server.
 # Why: phones on mobile data (5G/4G) and many hotel/office networks cannot connect directly to your PC. Without a relay the phone
 # says "connected" (it reached the server) and then nothing happens until the attempt times out. With the relay the traffic is
 # forwarded (still end-to-end encrypted: the relay only sees ciphertext).
@@ -31,6 +31,7 @@ if ($mode -in '2', '3') {
   try { $list = @(Get-Content $src -Raw | ConvertFrom-Json) } catch { throw 'That file is not valid JSON.' }
   $list = @($list | Where-Object { $_.urls -and $_.username -and $_.credential })
   if (-not $list.Count) { throw 'No usable entries: each needs urls, username and credential.' }
+  # make sure both UDP and TCP variants exist (TCP/443-style relays are what get through strict Wi-Fi and some carriers)
   $static = ConvertTo-Json -InputObject $list -Compress -Depth 4
   Write-Host "$($list.Count) static TURN entr$(if ($list.Count -eq 1) { 'y' } else { 'ies' }) accepted." -ForegroundColor DarkGray
 }

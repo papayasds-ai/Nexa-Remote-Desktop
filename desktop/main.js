@@ -2,7 +2,6 @@
 const { app, BrowserWindow, session, desktopCapturer, shell, Menu, ipcMain, protocol, net, nativeImage, safeStorage, powerSaveBlocker, Tray, clipboard } = require('electron');
 const path = require('path'), fs = require('fs'), crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
-const pipeNet = require('net');
 const { pathToFileURL } = require('url');
 
 // The UI is served from a stable origin (app://nexadesk) so localStorage (your ID key) survives OTA bundle swaps.
@@ -24,7 +23,7 @@ app.commandLine.appendSwitch('disable-default-apps');
 app.commandLine.appendSwitch('no-first-run');
 
 let win = null, helper = null, fellBack = false;
-const RELEASE_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).releasePrefix; return /^https:\/\/[a-z0-9.-]+\/$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
+const RELEASE_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).releasePrefix; return /^https:\/\/[a-z0-9.-]+\/([A-Za-z0-9._~-]+\/)*$/i.test(p) ? p : ''; } catch (_) { return ''; } })();   // host or host/path/ (the GitHub release 'ota' has a path); the installer is still checked against the signed manifest's sha256
 const OTA_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).otaPrefix; return /^https:\/\/[a-z0-9.-]+\/$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 const CMD = /^(M \d{1,5} \d{1,5}|[DU] [lrm]|W -?\d{1,4}|K \d{1,3} [01] [01]|T \d{1,5}|R -?\d{1,4} -?\d{1,4})$/;
@@ -135,15 +134,6 @@ ipcMain.handle('nx-secret-set', (e, v) => {
   if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable() || typeof v !== 'string' || v.length > 256) return false;
   try { fs.writeFileSync(secretFile(), safeStorage.encryptString(v)); return true; } catch (_) { return false; }
 });
-ipcMain.handle('nx-manage-admins', async e => {
-  if (!fromOurWindow(e) || process.platform !== 'win32') return { ok: false, why: 'Windows Setup is required.' };
-  const broker = inputBrokerPath();
-  if (!broker || !fs.existsSync(broker)) return { ok: false, why: 'The elevated input service is not included in this build.' };
-  const command = "$p=Start-Process -FilePath $env:NEXA_BROKER -ArgumentList @('--manage-admins') -Verb RunAs -PassThru -Wait; exit $p.ExitCode";
-  return await new Promise(resolve => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
-    windowsHide: true, env: { ...process.env, NEXA_BROKER: broker }
-  }, err => resolve(err ? { ok: false, why: 'Windows administrator approval was canceled or the settings window failed.' } : { ok: true })));
-});
 // system tray (optional, Settings > This PC): closing the window hides it instead of quitting, so this PC stays reachable
 let tray = null, trayOn = false, quitting = false;
 function showWin() { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } }
@@ -176,144 +166,23 @@ ipcMain.handle('nx-power', (e, o) => {
 ipcMain.on('nx-ota-apply', e => { if (win && e.sender === win.webContents) win.loadURL('app://nexadesk/index.html'); });
 
 // ---------- input injection (Windows) ----------
-let activeControlPeer = '', controlAllowed = false, brokerSocket = null, brokerMode = 'standard';
-let brokerRetry = null, brokerEpoch = 0, brokerLastNotice = '';
-const heldKeys = new Map(), heldButtons = new Set();
 function helperPath() { return app.isPackaged ? path.join(process.resourcesPath, 'inputhelper.ps1') : path.join(__dirname, 'inputhelper.ps1'); }
-function inputBrokerPath() {
-  if (process.platform !== 'win32') return '';
-  let name = '';
-  try { name = require(path.join(__dirname, 'build-config.json')).inputBrokerName || ''; } catch (_) {}
-  if (!/^NexaDeskInputBroker-\d+\.\d+\.\d+\.exe$/.test(name)) return '';
-  return app.isPackaged ? path.join(process.resourcesPath, 'inputbroker', name) : path.join(__dirname, 'inputbroker', 'dist', name);
-}
-function closeBrokerPipe() {
-  if (brokerRetry) { clearTimeout(brokerRetry); brokerRetry = null; }
-  const socket = brokerSocket; brokerSocket = null; brokerMode = 'standard';
-  if (socket) { socket.nexaIntentional = true; try { socket.destroy(); } catch (_) {} }
-}
-function scheduleBrokerRetry(epoch, delay = 15000) {
-  if (brokerRetry) clearTimeout(brokerRetry);
-  brokerRetry = setTimeout(() => {
-    brokerRetry = null;
-    if (epoch === brokerEpoch && controlAllowed && activeControlPeer) connectBroker(epoch, activeControlPeer);
-  }, delay);
-}
-function connectBroker(epoch, peer) {
-  const broker = inputBrokerPath();
-  if (!broker || !fs.existsSync(broker) || process.platform !== 'win32') return;
-  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[Diagnostics.Process]::GetCurrentProcess().SessionId'], { windowsHide: true }, (err, stdout) => {
-    if (epoch !== brokerEpoch || !controlAllowed || peer !== activeControlPeer) return;
-    const sessionId = Number(String(stdout || '').trim());
-    if (err || !Number.isInteger(sessionId) || sessionId <= 0) { scheduleBrokerRetry(epoch); return; }
-    const socket = pipeNet.createConnection({ path: `\\\\.\\pipe\\NexaDesk.Input.${sessionId}` });
-    brokerSocket = socket; brokerMode = 'pending';
-    let buffer = '', gotReply = false;
-    socket.setEncoding('utf8');
-    socket.on('connect', () => {
-      if (epoch !== brokerEpoch || !controlAllowed || peer !== activeControlPeer) { socket.nexaIntentional = true; socket.destroy(); return; }
-      socket.write(`C ${peer}\n`);
-    });
-    socket.on('data', data => {
-      buffer += data;
-      let newline;
-      while ((newline = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
-        if (!gotReply) {
-          gotReply = true;
-          if (epoch !== brokerEpoch || !controlAllowed || peer !== activeControlPeer) { socket.nexaIntentional = true; socket.destroy(); return; }
-          if (line === 'ADMIN') {
-            brokerMode = 'admin'; brokerLastNotice = '';
-            slog('elevated input enabled for allowlisted controller ' + peer);
-          } else {
-            brokerMode = 'standard';
-            if (brokerLastNotice !== peer + ':standard') slog('controller ' + peer + ' is not on the elevated input allowlist; using standard input');
-            brokerLastNotice = peer + ':standard';
-            socket.nexaIntentional = true; socket.destroy(); scheduleBrokerRetry(epoch);
-          }
-        } else if (line === 'REVOKED') {
-          brokerMode = 'standard'; brokerLastNotice = peer + ':revoked';
-          slog('elevated input revoked for controller ' + peer);
-          socket.nexaIntentional = true; socket.destroy(); scheduleBrokerRetry(epoch);
-          return;
-        }
-      }
-    });
-    socket.on('error', () => {
-      if (brokerSocket === socket) { brokerSocket = null; brokerMode = 'standard'; }
-      if (!socket.nexaIntentional && epoch === brokerEpoch && controlAllowed && activeControlPeer) {
-        if (brokerLastNotice !== 'unavailable') slog('elevated input service unavailable; standard input remains active');
-        brokerLastNotice = 'unavailable'; scheduleBrokerRetry(epoch);
-      }
-    });
-    socket.on('close', () => {
-      if (brokerSocket === socket) { brokerSocket = null; brokerMode = 'standard'; }
-      if (!socket.nexaIntentional && epoch === brokerEpoch && controlAllowed && activeControlPeer) scheduleBrokerRetry(epoch);
-    });
-  });
-}
-function setHostControl(peer, allowed) {
-  releaseHeldInput();
-  brokerEpoch++;
-  closeBrokerPipe();
-  activeControlPeer = peer || ''; controlAllowed = !!allowed;
-  brokerLastNotice = '';
-  if (controlAllowed && activeControlPeer) {
-    ensureHelper();                         // immediate normal input while the service pipe connects
-    connectBroker(brokerEpoch, activeControlPeer);
-  } else {
-    if (pendTimer) { clearTimeout(pendTimer); pendTimer = null; }
-    pendMove = null;
-  }
-}
-ipcMain.on('nx-host-session', (e, peer, allowed) => {
-  if (!fromOurWindow(e) || process.platform !== 'win32' || typeof allowed !== 'boolean') return;
-  if (peer === null && !allowed) return setHostControl('', false);
-  if (typeof peer !== 'string' || !/^\d{9}$/.test(peer)) return;
-  setHostControl(peer, allowed);
-});
 function ensureHelper() {
   if (helper || process.platform !== 'win32') return;
-  helper = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helperPath()], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+  helper = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helperPath()], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
   helper.on('exit', () => { helper = null; });
   helper.stdin.on('error', () => {});
-  helper.stderr.setEncoding('utf8');
-  let inputErr = '';
-  helper.stderr.on('data', chunk => {
-    inputErr += chunk;
-    const lines = inputErr.split(/\r?\n/); inputErr = lines.pop() || '';
-    for (const line of lines) if (/^NX_INPUT_(REJECTED|ERROR)\|/.test(line)) slog('input helper: ' + line.slice(0, 160));
-  });
 }
 // Mouse moves are absolute, so only the newest one matters: the first goes out at once, and a burst (for example after a network hiccup)
 // collapses into one jump at most every 8 ms instead of being replayed slowly. Clicks and keys flush the pending move first (order kept).
 let lastMove = 0, pendMove = null, pendTimer = null;
-function writeInput(c) {
-  if (!controlAllowed || !activeControlPeer) return;
-  if (brokerMode === 'admin' && brokerSocket && !brokerSocket.destroyed) brokerSocket.write(c + '\n');
-  else if (helper) helper.stdin.write(c + '\n');
-  const p = c.split(' ');
-  if (p[0] === 'D') heldButtons.add(p[1]);
-  else if (p[0] === 'U') heldButtons.delete(p[1]);
-  else if (p[0] === 'K') {
-    const id = p[1] + ' ' + p[3];
-    if (p[2] === '1') heldKeys.set(id, `K ${p[1]} 0 ${p[3]}`); else heldKeys.delete(id);
-  }
-}
-function releaseHeldInput() {
-  for (const keyUp of [...heldKeys.values()]) writeInput(keyUp);
-  heldKeys.clear();
-  for (const button of [...heldButtons]) writeInput(`U ${button}`);
-  heldButtons.clear();
-}
-function writeMove(c) { lastMove = Date.now(); writeInput(c); }
+function writeMove(c) { lastMove = Date.now(); if (helper) helper.stdin.write(c + '\n'); }
 function flushMove() { if (pendTimer) { clearTimeout(pendTimer); pendTimer = null; } if (pendMove) { writeMove(pendMove); pendMove = null; } }
 ipcMain.on('nx-input', (e, cmd) => {
   if (!win || e.sender !== win.webContents) return;
   if (typeof cmd !== 'string' || !CMD.test(cmd)) return;        // strict whitelist: nothing else reaches PowerShell
-  if (!controlAllowed || !activeControlPeer) return;
-  ensureHelper();
-  if (cmd.charCodeAt(0) !== 77) { flushMove(); writeInput(cmd); return; }   // not a move
+  ensureHelper(); if (!helper) return;
+  if (cmd.charCodeAt(0) !== 77) { flushMove(); helper.stdin.write(cmd + '\n'); return; }   // not a move
   const dt = Date.now() - lastMove;
   if (dt >= 8 && !pendTimer) return writeMove(cmd);
   pendMove = cmd;
@@ -348,7 +217,7 @@ function createWindow() {
   });
   win.webContents.on('did-finish-load', () => slog('page loaded'));
   win.webContents.on('did-fail-load', (_e, code, desc, url) => slog('page FAILED to load: ' + code + ' ' + desc + ' ' + url));
-  win.webContents.on('render-process-gone', (_e, d) => { slog('renderer gone: ' + (d && d.reason)); setHostControl('', false); });
+  win.webContents.on('render-process-gone', (_e, d) => slog('renderer gone: ' + (d && d.reason)));
   win.on('close', e => { if (trayOn && !quitting) { e.preventDefault(); win.hide(); } });   // tray mode: closing the window only hides it
   win.on('session-end', () => { quitting = true; });
   win.loadURL('app://nexadesk/index.html');
@@ -358,7 +227,7 @@ function createWindow() {
   });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', e => e.preventDefault());
-  win.on('closed', () => { setHostControl('', false); slog('window closed'); win = null; });
+  win.on('closed', () => { slog('window closed'); win = null; });
 }
 
 if (process.platform === 'win32') app.setAppUserModelId('com.nexadesk.desktop');   // taskbar groups and icons by this ID
@@ -381,5 +250,5 @@ app.whenReady().then(() => {
   createWindow();
 });
 app.on('second-instance', showWin);
-app.on('before-quit', () => { quitting = true; setHostControl('', false); if (helper && helper.stdin) helper.stdin.end(); slog('quit'); });
-app.on('window-all-closed', () => { setHostControl('', false); if (helper && helper.stdin) helper.stdin.end(); app.quit(); });
+app.on('before-quit', () => { quitting = true; slog('quit'); });
+app.on('window-all-closed', () => { if (helper) helper.kill(); app.quit(); });

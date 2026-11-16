@@ -1,0 +1,83 @@
+# Builds the two big Windows installers (Setup + Portable) on GitHub, so they never have to be uploaded from a slow home connection.
+# Started by scripts\cloud-windows.ps1 (START-HERE option 1). The signed update manifest is still created and signed on your PC.
+name: build-windows
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, for example 1.0.92'
+        required: true
+        type: string
+      server:
+        description: 'Signaling server URL (wss://...)'
+        required: true
+        type: string
+      release_prefix:
+        description: 'Trusted installer host baked into the build (https://.../)'
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: build-windows
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      NX_VER: ${{ inputs.version }}
+      NX_SERVER: ${{ inputs.server }}
+      NX_RELPREFIX: ${{ inputs.release_prefix }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build Setup and Portable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = $env:NX_VER; $server = $env:NX_SERVER; $rel = $env:NX_RELPREFIX
+          if ($ver -notmatch '^\d+\.\d+\.\d+$') { throw "bad version: $ver" }
+          if ($server -notmatch '^wss://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?$') { throw "bad server url: $server" }
+          if ($rel -notmatch '^https://[A-Za-z0-9.-]+/([A-Za-z0-9._~-]+/)*$') { throw "bad release prefix: $rel" }
+          $origin = $server -replace '^wss://', 'https://'
+          $utf8 = New-Object Text.UTF8Encoding $false
+          $desk = Join-Path $PWD 'desktop'
+          Remove-Item (Join-Path $desk 'www') -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $PWD 'app/www') (Join-Path $desk 'www') -Recurse
+          $cfg = "window.NEXA_DEFAULT_SERVER = $(ConvertTo-Json $server -Compress); window.NEXA_VERSION = `"$ver`";"
+          [IO.File]::WriteAllText((Join-Path $desk 'www/config.js'), $cfg, $utf8)
+          $idx = Join-Path $desk 'www/index.html'
+          [IO.File]::WriteAllText($idx, [IO.File]::ReadAllText($idx).Replace('__OTA_ORIGIN__', $origin), $utf8)
+          [IO.File]::WriteAllText((Join-Path $desk 'build-config.json'), (@{ otaPrefix = "$origin/"; releasePrefix = $rel } | ConvertTo-Json -Compress), $utf8)
+          Push-Location $desk
+          npm install --no-audit --no-fund
+          if ($LASTEXITCODE) { throw 'npm install failed' }
+          npm version $ver --no-git-tag-version --allow-same-version | Out-Null
+          npm run dist
+          if ($LASTEXITCODE) { throw 'electron-builder failed' }
+          Pop-Location
+          $dist = Join-Path $desk 'dist'
+          $setup = Get-Item (Join-Path $dist "NexaDesk-Setup-$ver.exe")
+          $port = Get-Item (Join-Path $dist "NexaDesk-Portable-$ver.exe")
+          foreach ($f in @($setup, $port)) {
+            $fv = $f.VersionInfo.FileVersion
+            Write-Host "$($f.Name): $([math]::Round($f.Length / 1MB, 1)) MB, file version $fv"
+            if ($fv -notlike "$ver*") { throw "version inside $($f.Name) is $fv, expected $ver" }
+          }
+          $info = [ordered]@{
+            version  = $ver
+            setup    = [ordered]@{ name = $setup.Name; size = $setup.Length; sha256 = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower() }
+            portable = [ordered]@{ name = $port.Name; size = $port.Length; sha256 = (Get-FileHash $port.FullName -Algorithm SHA256).Hash.ToLower() }
+          }
+          $jsonPath = Join-Path $dist "win-$ver.json"
+          [IO.File]::WriteAllText($jsonPath, ($info | ConvertTo-Json -Depth 4), $utf8)
+          gh release upload ota $setup.FullName $port.FullName --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE) { throw 'uploading the installers to the release failed' }
+          # the small json goes last: it tells your PC that both installers are complete
+          gh release upload ota $jsonPath --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE) { throw 'uploading win json failed' }
+          Write-Host "Uploaded NexaDesk-Setup-$ver.exe and NexaDesk-Portable-$ver.exe to the release 'ota'."

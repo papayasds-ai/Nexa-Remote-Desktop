@@ -26,7 +26,7 @@
           <div class="lbl">Your ID</div><div class="big" id="myId">— — —</div>
           <div class="lbl">Password</div><div class="big sm" id="myPw">—</div>
           <div class="row"><button id="copyId">Copy ID</button><button id="copyPw">Copy password</button><button id="regenPw">New password</button></div>
-          <p class="hint" id="hostHint">Share your ID and password with someone you trust. You will always see a prompt before they can view your screen (unless unattended access is on). For access while you are away, set a permanent password in Security and enable unattended access.</p>
+          <p class="hint" id="hostHint">Share your ID and password with someone you trust. You will always see a prompt before they can view your screen (unless unattended access is on).</p>
         </div>
         <div class="card">
           <h2>Control a Remote Device</h2>
@@ -66,11 +66,6 @@
           <div class="lbl">Permanent password (unattended)</div>
           <input id="permPw" type="password" placeholder="min 12 characters" autocomplete="new-password">
           <button id="savePerm">Save permanent password</button>
-        </div>
-        <div class="card wide" id="adminControllerCard" hidden>
-          <h2>Elevated-window controllers</h2>
-          <p class="hint">Only NexaDesk controller IDs that a Windows administrator adds here can send input to elevated application windows. The host must still allow control for the session. Setup and roster changes require Windows administrator approval. Secure-desktop UAC prompts remain protected by Windows.</p>
-          <button id="manageAdminControllers">Manage admin controller IDs</button>
         </div>
         <div class="card wide">
           <h2>Quick keys (phone)</h2>

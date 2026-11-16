@@ -13,7 +13,7 @@ function genSecret(n = 12) {
 }
 const S = {
   get(k, d) { try { const v = localStorage.getItem('nx_' + k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
-  set(k, v) { try { localStorage.setItem('nx_' + k, JSON.stringify(v)); return true; } catch (_) { return false; } }
+  set(k, v) { try { localStorage.setItem('nx_' + k, JSON.stringify(v)); } catch (_) {} }
 };
 const fmtId = id => id ? id.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3') : '— — —';
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 3200); }
@@ -54,12 +54,10 @@ let permPwCache = '';
 async function loadPermPw() {
   const sec = window.nexa && window.nexa.secret && window.nexa.secret.available ? window.nexa.secret : null;
   if (sec) {
-    try { permPwCache = (await sec.get()) || ''; } catch (_) { permPwCache = ''; }
+    permPwCache = (await sec.get()) || '';
     const old = S.get('permpw', '');                                  // migrate an older plain-text copy
-    if (old && !permPwCache) {
-      permPwCache = old;                                                // keep the current session usable if secure migration fails
-      try { if (await sec.set(old)) localStorage.removeItem('nx_permpw'); } catch (_) {}
-    } else if (old) localStorage.removeItem('nx_permpw');
+    if (old && !permPwCache) { permPwCache = old; await sec.set(old); }
+    if (old) localStorage.removeItem('nx_permpw');
   } else permPwCache = S.get('permpw', '') || '';
 }
 function newPw() {
@@ -154,12 +152,10 @@ async function startHost(from, secret, perm) {
   const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 60, max: 60 } }, audio: false });
   const pc = new RTCPeerConnection({ iceServers: iceList() }); watchIce(pc, 'host', from);
   host = { peer: from, pc, stream, perm, secret, q: [], remoteSet: false, t0: Date.now() };
-  try { if (window.nexa && window.nexa.hostSession) window.nexa.hostSession(from, !!perm.control); } catch (_) {}
   stream.getTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (_) {} pc.addTrack(t, stream); });
   stream.getVideoTracks()[0].onended = () => endHost(true);
   const dc = pc.createDataChannel('ctl', { ordered: true }); host.dc = dc;
   dc.onmessage = e => onHostInput(e.data);
-  dc.onclose = () => { if (host && host.pc === pc) { log('host', from, 'control channel closed'); endHost(true); } };
   pc.onicecandidate = e => e.candidate && send({ t: 'sig', to: from, data: { ice: e.candidate } });
   pc.onconnectionstatechange = () => {   // a network change (Wi-Fi <-> 5G) must not end the session at once: try an ICE restart first
     const s = pc.connectionState;
@@ -177,7 +173,7 @@ async function startHost(from, secret, perm) {
   log('host', from, 'session started (control=' + perm.control + ')');
   const info = await sas(pc).catch(() => ''); if (info) toast('Session verification code: ' + info);
 }
-$('#bnCtl').onchange = e => { if (host) { host.perm.control = e.target.checked; try { window.nexa && window.nexa.hostSession && window.nexa.hostSession(host.peer, host.perm.control); } catch (_) {} } };
+$('#bnCtl').onchange = e => { if (host) host.perm.control = e.target.checked; };
 $('#bnStop').onclick = () => endHost(true);
 // ---- stream quality presets (chosen by the viewer, applied by the host) ----
 // 'motion' keeps the frame rate up (smooth cursor) and lets the resolution drop under load; 'detail' keeps text sharp but may lower the frame rate
@@ -202,7 +198,6 @@ function endHost(notify) {
   $('#banner').hidden = true; log('host', h.peer, 'session ended' + (h.t0 ? ' after ' + Math.round((Date.now() - h.t0) / 1000) + ' s' : '')); setTimeout(applyWhenIdle, 500);
   if (!S.get('unattended', false)) newPw();       // rotate one-time password after every session
   if (!closing && S.get('lockOnEnd', false) && h.perm && h.perm.control && h.t0 && Date.now() - h.t0 > 3000) lockThisPc();
-  try { window.nexa && window.nexa.hostSession && window.nexa.hostSession(null, false); } catch (_) {}
 }
 function lockThisPc() {                            // same keys as the "Lock PC" button (Win+L), pressed locally
   const keys = COMBOS['win-l']; if (!keys || !window.nexa) return;
@@ -623,16 +618,6 @@ const copy = async (txt, ok) => { try { await navigator.clipboard.writeText(txt)
 $('#copyId').onclick = () => myId && copy(myId, 'ID copied');
 $('#copyPw').onclick = () => pw && copy(pw, 'Password copied');
 $('#regenPw').onclick = () => { if (S.get('unattended', false)) toast('Permanent password is active (Security tab)'); else newPw(); };
-const adminControllerCard = $('#adminControllerCard');
-if (adminControllerCard && window.nexa && window.nexa.manageAdmins) {
-  Promise.resolve(window.nexa.nativeVersion ? window.nexa.nativeVersion() : '').then(version => { if (version) adminControllerCard.hidden = false; }).catch(() => {});
-  $('#manageAdminControllers').onclick = async () => {
-    try {
-      const result = await window.nexa.manageAdmins();
-      if (!result || !result.ok) toast((result && result.why) || 'Admin controller settings could not be opened');
-    } catch (_) { toast('Admin controller settings could not be opened'); }
-  };
-}
 $('#remId').addEventListener('input', e => { const d = e.target.value.replace(/\D/g, '').slice(0, 9); e.target.value = d.replace(/(\d{3})(?=\d)/g, '$1 '); });
 function renderSaved() {
   const box = $('#savedPcs'); box.innerHTML = '';
@@ -675,16 +660,15 @@ function renderRecent() {
 }
 $('#savePc').onclick = () => {
   const id = $('#remId').value.replace(/\D/g, '');
-  if (id.length !== 9) return toast('Enter the full 9-digit partner ID');
+  if (id.length < 6) return toast('Enter the partner ID first');
   const old = S.get('savedPcs', []).find(p => p.id === id);
   const l = S.get('savedPcs', []).filter(p => p.id !== id);
   const pw = $('#remPw').value.trim();                 // full credentials: the password typed in the box is saved with the ID (on this device only)
   l.unshift({ id, label: (old && old.label) || 'PC ' + fmtId(id), pw: pw || (old && old.pw) || '' });
-  if (!S.set('savedPcs', l.slice(0, 50))) return toast('Could not save on this device (storage is unavailable)');
-  renderSaved(); toast(pw ? 'Saved with password' : 'Saved');
+  S.set('savedPcs', l.slice(0, 50)); renderSaved(); toast(pw ? 'Saved with password' : 'Saved');
 };
 renderSaved(); renderRecent();
-$('#connectBtn').onclick = () => { connectTo($('#remId').value, $('#remPw').value.trim()); };
+$('#connectBtn').onclick = () => { connectTo($('#remId').value, $('#remPw').value.trim()); $('#remPw').value = ''; };
 $('#remPw').addEventListener('keydown', e => e.key === 'Enter' && $('#connectBtn').click());
 $('#newInvite').onclick = () => { const c = genSecret(12); invites.clear(); invites.set(c, Date.now() + 10 * 60000); $('#inviteCode').textContent = c; };
 $('#copyInvite').onclick = () => validInvites().length && copy([...invites.keys()][0], 'Invite copied');
@@ -710,10 +694,8 @@ if (canHost && window.nexa.power) {
 $('#savePerm').onclick = async () => {
   const v = $('#permPw').value; if (v.length < 12) return toast('Use at least 12 characters');
   const sec = window.nexa && window.nexa.secret && window.nexa.secret.available ? window.nexa.secret : null;
-  try {
-    if (sec) { if (!(await sec.set(v))) return toast('Could not store the password securely'); localStorage.removeItem('nx_permpw'); }
-    else if (!S.set('permpw', v)) return toast('Could not save on this device (storage is unavailable)');
-  } catch (_) { return toast('Could not save the permanent password securely'); }
+  if (sec) { if (!(await sec.set(v))) return toast('Could not store the password securely'); localStorage.removeItem('nx_permpw'); }
+  else S.set('permpw', v);
   permPwCache = v; $('#permPw').value = ''; toast('Saved'); if (S.get('unattended', false)) newPw();
 };
 loadPermPw().then(newPw);
@@ -869,35 +851,32 @@ function askUpdate(key, title, go) {
 function whenIdle(fn) { const t = setInterval(() => { if (!host && !view) { clearInterval(t); fn(); } }, 2000); }
 let nativePend = false, nativeStagedV = '';                                    // an app-package install is already scheduled or running
 async function installNativeNow(nat) {
-  const winVer = nat.windows.version || nat.version;
-  toast('Installing app update v' + winVer + '…');
-  const r = await window.nexa.nativeInstall({ url: nat.windows.url, sha256: nat.windows.sha256, version: winVer });
-  ulog('app installer v' + winVer + ': ' + (r && r.ok ? 'started' : 'failed (' + ((r && r.why) || 'unknown') + ')'));
+  toast('Installing app update v' + nat.version + '…');
+  const r = await window.nexa.nativeInstall({ url: nat.windows.url, sha256: nat.windows.sha256, version: nat.version });
+  ulog('app installer v' + nat.version + ': ' + (r && r.ok ? 'started' : 'failed (' + ((r && r.why) || 'unknown') + ')'));
   if (!r || !r.ok) { nativePend = false; toast('App update failed: ' + ((r && r.why) || 'unknown')); }
 }
 async function handleNative(m, forceN) {
   const nat = m.native; if (!nat) return;
   if (nat.windows && window.nexa && window.nexa.nativeInstall && window.nexa.nativeVersion) {
     const cur = await window.nexa.nativeVersion();
-    const winVer = nat.windows.version || nat.version;
-    if (cur && cmpv(winVer, cur) > 0) {
-      if (nativeStagedV !== winVer && window.nexa.nativeStage) { nativeStagedV = winVer; window.nexa.nativeStage({ url: nat.windows.url, sha256: nat.windows.sha256, version: winVer }).then(r => { if (!r || !r.ok) nativeStagedV = ''; }).catch(() => { nativeStagedV = ''; }); }
+    if (cur && cmpv(nat.version, cur) > 0) {
+      if (nativeStagedV !== nat.version && window.nexa.nativeStage) { nativeStagedV = nat.version; window.nexa.nativeStage({ url: nat.windows.url, sha256: nat.windows.sha256, version: nat.version }).then(r => { if (!r || !r.ok) nativeStagedV = ''; }).catch(() => { nativeStagedV = ''; }); }
       if (nativePend) return;
-      if (forceN) { nativePend = true; return withCountdown('App update v' + winVer, () => installNativeNow(nat)); }
+      if (forceN) { nativePend = true; return withCountdown('App update v' + nat.version, () => installNativeNow(nat)); }
       if (autoUpd()) { nativePend = true; return whenIdle(() => installNativeNow(nat)); }
-      $('#nativeBox').textContent = 'App update v' + winVer + ' is ready. Install it when you are not in a session.';
+      $('#nativeBox').textContent = 'App update v' + nat.version + ' is ready. Install it when you are not in a session.';
       $('#installNative').hidden = false;
       $('#installNative').onclick = () => { if (host || view) return toast('Finish the current session first'); installNativeNow(nat); };
-      askUpdate('n' + winVer, 'App update v' + winVer, () => installNativeNow(nat));
+      askUpdate('n' + nat.version, 'App update v' + nat.version, () => installNativeNow(nat));
     }
   }
   if (nat.android && window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'android') {
     let curA = ''; try { curA = (await CU().current()).native || ''; } catch (_) {}
     const link = $('#apkLink');
-    const androidVer = nat.android.version || nat.version;
-    if (!curA || cmpv(androidVer, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + androidVer + ')'; link.hidden = false;
-      askUpdate('a' + androidVer, 'App update v' + androidVer, () => { const a = document.createElement('a'); a.href = nat.android.url; a.target = '_blank'; a.rel = 'noopener'; a.click(); });
-      if (forceN) { const b = $('#updApk'); b.href = nat.android.url; b.hidden = false; updMsg('Mandatory app update v' + androidVer + ': tap the button to download and install it.'); } }
+    if (!curA || cmpv(nat.version, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; link.hidden = false;
+      askUpdate('a' + nat.version, 'App update v' + nat.version, () => { const a = document.createElement('a'); a.href = nat.android.url; a.target = '_blank'; a.rel = 'noopener'; a.click(); });
+      if (forceN) { const b = $('#updApk'); b.href = nat.android.url; b.hidden = false; updMsg('Mandatory app update v' + nat.version + ': tap the button to download and install it.'); } }
     else link.hidden = true;
   }
 }

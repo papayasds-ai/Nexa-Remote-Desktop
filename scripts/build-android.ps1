@@ -125,8 +125,7 @@ $scheme = if ($AllowInsecure) { 'http' } else { 'https' }
 
 Push-Location $app
 try {
-  # file: dependencies must be packed into node_modules rather than linked; Windows AppContainer / standard users may not create symlinks.
-  npm install --no-audit --no-fund --install-links; if ($LASTEXITCODE) { throw 'npm install failed' }
+  npm install --no-audit --no-fund; if ($LASTEXITCODE) { throw 'npm install failed' }
   if (-not (Test-Path 'android')) { npx cap add android; if ($LASTEXITCODE) { throw 'cap add android failed' } }
   npx cap sync android; if ($LASTEXITCODE) { throw 'cap sync failed' }
 

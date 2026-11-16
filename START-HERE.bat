@@ -9,8 +9,8 @@ echo ==========================================
 echo   NexaDesk - secure remote access builder
 echo ==========================================
 echo  UPDATE ALL DEVICES  (Windows + Android)
-echo   1) AUTO    quick  - next version number, UI/logic only (no rebuild, seconds)
-echo   2) AUTO    full   - next version number, rebuilds EXE + APK
+echo   1) AUTO    FULL   - REAL update: next version, rebuilds EXE + APK, apps install the new package
+echo   2) AUTO    quick  - web layer only (seconds; the installed app package stays as it is)
 echo   3) MANUAL         - YOU type the version number; quick or full; forced or normal
 echo   4) Hands-free auto-release: turn ON  (checks every 10 minutes)
 echo   5) Hands-free auto-release: turn OFF
@@ -23,10 +23,10 @@ echo   R) Emergency: publish with the RECOVERY key (daily key lost)
 echo   0) Exit
 echo.
 set c=
-set /p c=Choose: 
-if "%c%"=="1" (%PS% scripts\update.ps1 -Mode auto -Scope quick & pause & goto menu)
-if "%c%"=="2" (%PS% scripts\update.ps1 -Mode auto -Scope full & pause & goto menu)
-if "%c%"=="3" (%PS% scripts\update.ps1 -Mode manual & pause & goto menu)
+set /p c=Choose:
+if "%c%"=="1" (%PS% scripts\update.ps1 -Mode auto -Scope full & pause & exit /b)
+if "%c%"=="2" (%PS% scripts\update.ps1 -Mode auto -Scope quick & pause & exit /b)
+if "%c%"=="3" (%PS% scripts\update.ps1 -Mode manual & pause & exit /b)
 if "%c%"=="4" (%PS% scripts\install-auto-release.ps1 & pause & goto menu)
 if "%c%"=="5" (%PS% scripts\install-auto-release.ps1 -Remove & pause & goto menu)
 if "%c%"=="6" (%PS% scripts\build-windows.ps1 & pause & goto menu)
@@ -40,7 +40,7 @@ goto menu
 
 :recovery
 set k=
-set /p k=Path to RECOVERY-MOVE-OFFLINE.pem: 
+set /p k=Path to RECOVERY-MOVE-OFFLINE.pem:
 if "!k!"=="" goto menu
 %PS% scripts\publish-ota.ps1 -RecoveryKey "!k!"
 pause

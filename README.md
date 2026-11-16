@@ -1,17 +1,5 @@
 # NexaDesk – secure remote access (TeamViewer-style)
 
-## Download NexaDesk
-
-Open the [stable OTA release](https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/tag/ota) and download the latest version for your device:
-
-- **Windows installer:** `NexaDesk-Setup-<version>.exe`
-- **Windows portable:** `NexaDesk-Portable-<version>.exe`
-- **Android:** `NexaDesk-<version>.apk`
-
-The stable `ota` release is updated in place, so the link stays the same. The public repository root keeps a copy of each signed web update for download and verification; installed apps retrieve updates from the Cloudflare Worker. Forced updates are announced to connected devices only after the signature and bundle checks pass.
-
-The root `www-<version>.zip`, `update.json`, and `update.sig2` files are the signed web-layer update. The release assets contain the Windows and Android downloads. Never upload signing keys, keystore passwords, server secrets, or notification tokens to this public repository.
-
 Components
 - `server/`      Signaling server (Node.js). Blind relay: never sees passwords or screen data. Issues TURN credentials.
 - `app/www/`     Shared UI + WebRTC/crypto logic (used by both Windows and Android).
@@ -23,7 +11,7 @@ Components
 1. Install Node.js 22.12+ LTS (the build tools need it), Git for Windows, and (for the APK) JDK 17 + Android Studio SDK with `ANDROID_HOME` set.
 2. Double-click `START-HERE.bat` -> **2) AUTO full**. First run it logs in to Cloudflare (browser), creates the server, builds
    `output\NexaDesk-Setup.exe` + `NexaDesk.apk`, pushes to GitHub (a sign-in window may appear once) and pings devices.
-3. Run the Windows Setup with an account that can elevate to install the machine-wide input service; whether Windows shows a UAC prompt follows that PC's local policy. Portable does not install the service. Install the APK on Android. ID and password are ready immediately.
+3. Install the EXE / APK. ID and password are there immediately - no server to run, nothing to type.
 4. Later: **1) AUTO quick** for UI/logic changes (no rebuild, all devices update in seconds), **2) AUTO full** when native parts change, **3) MANUAL** to choose the version number yourself.
 
 ## Hosting the server on Cloudflare (no VPS needed)
@@ -45,8 +33,7 @@ Components
   also HMAC-signed with the shared secret, so a malicious/compromised signaling server cannot MITM the session.
 - Host approval prompt with per-session permissions (control, clipboard); red banner + Disconnect button always visible while shared.
 - 5 failed attempts => 10-minute lockout per peer; server-side per-IP request limits and flood control.
-- Electron: sandbox, context isolation, strict CSP, and only a whitelist of numeric input commands reaches the local input backends.
-- Elevated Windows app control uses a machine-installed input service. Only controller IDs added to the machine-protected allowlist by a Windows administrator can use it; host control consent still applies. Other controllers stay at the normal user integrity level. The service does not grant Windows account administrator rights or interact with Windows' secure desktop.
+- Electron: sandbox, context isolation, strict CSP, and only a whitelist of numeric input commands reaches the PowerShell input helper.
 - Local connection log (Security tab). Session verification code shown on both ends for voice comparison.
 
 ## Build toolchain
@@ -99,8 +86,7 @@ Everything is published from **START-HERE.bat**. Every update is described by th
 - **Hands-free auto-release** (menu 4 on / 5 off): every 10 minutes the PC checks the project. `app\www` changed -> quick update; `desktop\` changed -> full update. Version number automatic, forced. Log: `build\auto-release.log`.
 - **R) Recovery key**: quick update signed with the offline recovery key, only if the daily key is lost.
 - **Why "three modes"?** They are not three update systems but what a device can do: **Forced** (the release is marked forced), **Automatic** (Settings > Version > *Install updates automatically*, on by default: installs when idle) and **Manual** (that setting off: the update is downloaded and waits for the *Install update* button). Forced always wins; nothing ever interrupts a live session except a forced update after its warning.
-- **Native packages:** the Windows app downloads the new Setup from your release host and checks its SHA-256 before starting it. Setup requires administrator-level elevation because it installs the machine-wide input service. Windows shows a UAC prompt according to local policy. Android cannot install an APK silently, so the app shows a download link.
-- **Elevated input service:** Setup installs the LocalSystem input broker under Program Files and registers it as an automatic Windows service. Opening the controller allowlist editor and updating the native Windows package also require administrator-level elevation; UAC prompts follow Windows policy. After installation, allowlisted remote input does not prompt for UAC; ordinary controllers cannot use the elevated pipe. Portable builds do not install the service.
+- **Native packages:** the Windows app downloads the new Setup from your release host, checks its SHA-256 and installs it silently. Android cannot install an APK silently, so the app shows a download link.
 - Setup builds use `compression: store` and keep only the English locale, so Portable starts faster; Portable still unpacks to `%TEMP%\NexaDeskPortable` on every launch (exclude that folder in Defender, or use the Setup / unpacked ZIP).
 
 ## Security review (what was checked)
@@ -141,7 +127,7 @@ Everything is published from **START-HERE.bat**. Every update is described by th
 - **Continuous clipboard sync:** the clipboard is shared on request only, so copied passwords are not sent automatically.
 
 ## Honest limitations (v1)
-- Windows is the only controllable host. Android and other OSes are viewers. Elevated application windows can be controlled only by allowlisted NexaDesk controller IDs while the host permits control. Windows secure-desktop UAC prompts, Ctrl+Alt+Del, and the lock screen stay protected by Windows.
+- Windows is the only controllable host. Android and other OSes are viewers. Elevated/UAC windows and the lock screen can't be controlled unless the app runs as administrator.
 - No file transfer, multi-monitor picker, audio, or Ctrl+Alt+Del yet.
 - Not independently security-audited. EXE/APK are unsigned by a trusted CA: Windows SmartScreen will warn until you sign with a code-signing certificate.
 - Passwords are stored in the app's local storage; use OS disk encryption.
