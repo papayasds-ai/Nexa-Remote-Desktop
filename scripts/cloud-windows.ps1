@@ -63,7 +63,12 @@ function Invoke-CloudWindowsBuild([string]$root, [string]$ver, [string]$server, 
     Start-Sleep -Seconds 15
     $el = [int]((Get-Date) - $t0).TotalSeconds
     if ($el -gt 2700) { Write-Host 'The GitHub build took longer than 45 minutes. Open the run page above to see why.' -ForegroundColor Red; return $fail }
-    if ((Invoke-Gh run view $id --repo $repo --json status,conclusion --jq '.status + " " + .conclusion') -ne 0) { continue }
+    $rc = Invoke-Gh run view $id --repo $repo --json status,conclusion --jq '.status + " " + .conclusion'
+    if ($rc -ne 0) {   # second way to read the status, and say so instead of waiting silently
+      $why = (@($script:ghOut) -join ' ')
+      $rc = Invoke-Gh run list --repo $repo --workflow build-windows.yml --limit 10 --json databaseId,status,conclusion --jq ".[] | select(.databaseId==$id) | .status + \" \" + .conclusion"
+      if ($rc -ne 0 -or -not @($script:ghOut)) { Write-Host "    could not read the build status (${el}s): $why" -ForegroundColor Yellow; continue }
+    }
     $st = ("$(@($script:ghOut)[0])").Trim()
     if ($st -like 'completed*') { $concl = ($st -replace '^completed\s*', '').Trim(); break }
     Write-Progress -Activity "GitHub builds NexaDesk v$ver" -Status "$st   elapsed ${el}s" -PercentComplete -1
