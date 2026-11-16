@@ -1,0 +1,15 @@
+{
+    "version":  "1.0.91",
+    "bundle":  "www-1.0.91.zip",
+    "sha256":  "c00d17dabbf72ea204000b6f7709364ce2716623a8e344bcf4f0cc37da5a87f8",
+    "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
+    "released":  "2026-11-16T21:32:14.5395126Z",
+    "trust":  [
+                  "d90ea841dfdb9803",
+                  "047d1bba55ce3069"
+              ],
+    "keyId":  "",
+    "force":  true,
+    "notes":  "",
+    "native":  null
+}
