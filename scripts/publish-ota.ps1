@@ -1,14 +1,33 @@
 # Publishes a web-layer OTA update to GitHub: ota/update.json + ota/www-<version>.zip (old packages are erased),
 # syncs the source code, updates the server, then pings every online device so they update immediately.
-param([switch]$NoBump, [switch]$Force, [switch]$NoForce, [string]$AppKey = '', [string]$RecoveryKey = '', [string]$Version = '', [string]$Notes = '')   # -RecoveryKey <file>: publish with the offline recovery key (daily key lost)   # -AppKey <id|none>: legacy bridge for apps installed before signing was removed
+param([switch]$NoBump, [switch]$Force, [string]$AppKey = '', [string]$RecoveryKey = '')   # -RecoveryKey <file>: publish with the offline recovery key (daily key lost)   # -AppKey <id|none>: legacy bridge for apps installed before signing was removed
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\common.ps1"
-$repoUrl = 'https://github.com/papayasds-ai/Nexa-Remote-Desktop.git'
+$repoSlug = Resolve-GitHubRepo $root -Create
+if (-not $repoSlug) { throw 'No GitHub repository: run  gh auth login  first (or put owner/name into github-repo.txt).' }
+$repoUrl = "https://github.com/$repoSlug.git"
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required: https://git-scm.com/download/win' }
 function Invoke-Git { $ErrorActionPreference = 'Continue'; & git.exe @args; if ($LASTEXITCODE) { throw "git $($args -join ' ') failed" } }
-# (Invoke-Gh and Publish-OtaRelease live in common.ps1: the 'ota' release is updated in place, never deleted.)
-try {
+# gh.exe (GitHub CLI) with stderr captured; returns its exit code. Output is kept in $script:ghOut.
+function Invoke-Gh { $ErrorActionPreference = 'Continue'; $script:ghOut = & gh.exe @args 2>&1; return $LASTEXITCODE }
+
+# Replaces the GitHub release 'ota' with this version's installers and APK. The old release, its files and its tag are deleted first.
+function Publish-OtaRelease([string]$ver, [string]$sha, [string]$outDir) {
+  $names = @("NexaDesk-Setup-$ver.exe", "NexaDesk-Portable-$ver.exe", "NexaDesk-$ver.apk")
+  $files = @(Get-ChildItem $outDir -File -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.Name })
+  if ($files.Count -eq 0) { Write-Host "GitHub 'ota' release left unchanged: no v$ver builds in output\ (a quick update only changes the web layer)." -ForegroundColor Yellow; return }
+  if ($names[2] -notin $files.Name) { Write-Host "Note: no Android APK for v$ver, so the release will not contain one." -ForegroundColor Yellow }
+  if (-not (Get-Command gh.exe -ErrorAction SilentlyContinue)) { Write-Host "GitHub 'ota' release NOT updated: GitHub CLI is not installed. Run: winget install GitHub.cli   then: gh auth login   then run this again." -ForegroundColor Red; return }
+  if ((Invoke-Gh auth status) -ne 0) { Write-Host "GitHub 'ota' release NOT updated: run 'gh auth login' once, then run this again." -ForegroundColor Red; return }
+  $repo = $repoSlug
+  Invoke-Gh release delete ota --repo $repo --cleanup-tag --yes | Out-Null   # old release, its files and its tag
+  $notes = "NexaDesk v$ver`n`nWindows: NexaDesk-Setup-$ver.exe (installer), NexaDesk-Portable-$ver.exe`nAndroid: NexaDesk-$ver.apk"
+  $ghArgs = @('release', 'create', 'ota', '--repo', $repo, '--target', $sha, '--title', "NexaDesk v$ver", '--notes', $notes) + @($files.FullName)
+  if ((Invoke-Gh @ghArgs) -ne 0) { Write-Host "GitHub 'ota' release FAILED:`n$($script:ghOut)" -ForegroundColor Red; return }
+  Write-Host "GitHub 'ota' release now holds v$ver ($($files.Count) file(s)): https://github.com/$repo/releases/tag/ota" -ForegroundColor Green
+}
+
 $nodeVer = [version]((node -v).TrimStart('v'))
 if ($nodeVer -lt [version]'22.12.0') { throw "Node.js 22.12 or newer is required (found $nodeVer). Install the current LTS from https://nodejs.org" }
 $keys = Initialize-UpdateKeys $root -RecoveryKey $RecoveryKey
@@ -25,7 +44,7 @@ if (-not (Test-Path $urlFile)) { Write-Host 'No server yet - creating it on Clou
 if (-not (Test-Path $urlFile)) { throw 'Server setup did not finish. Run option 5 and read the messages.' }
 $server = (Get-Content $urlFile -Raw).Trim()
 $httpBase = $server -replace '^wss://', 'https://' -replace '^ws://', 'http://'
-if (-not $NoBump) { if ($Version) { & "$PSScriptRoot\bump-version.ps1" -Set $Version } else { & "$PSScriptRoot\bump-version.ps1" } }   # -Version = MANUAL number, otherwise AUTO
+if (-not $NoBump) { & "$PSScriptRoot\bump-version.ps1" }
 $ver = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 $liveNow = Get-PublishedManifest $root
 if ($liveNow -and $liveNow.version -and ([version]$liveNow.version -ge [version]$ver)) { throw "v$ver is not newer than the live v$($liveNow.version). Nothing was published." }
@@ -46,45 +65,30 @@ $outDir = Join-Path $root 'output'
 $relFile = Join-Path $root 'release-host.txt'
 $setupName = "NexaDesk-Setup-$ver.exe"; $apkName = "NexaDesk-$ver.apk"
 $haveSetup = Test-Path (Join-Path $outDir $setupName); $haveApk = Test-Path (Join-Path $outDir $apkName)
-# Installer host: release-host.txt (Cloudflare R2) when present, otherwise the GitHub release 'ota'. For a REAL update the installers must be on the host
-# (and verified) BEFORE the signed manifest announces them, so the apps never get a download link that does not work yet.
-$rh = Get-ReleaseHost $root
-$useGh = ($rh -like 'https://github.com/*')
-$cloudWin = ($useGh -and (Test-Path (Join-Path $root 'cloud-windows.txt')))   # Windows installers are built ON GITHUB (a slow upload line cannot send 100+ MB)
-$cloudInfo = $null
-if ($cloudWin) {
-  $cr = @(Invoke-CloudWindowsBuild $root $ver $server $build)
-  $cloudInfo = $cr[-1]
-  $haveSetup = [bool]($cloudInfo -and $cloudInfo.ok)
-  if (-not $haveSetup) { Write-Host "`nWARNING: the cloud build of the Windows installers did not finish, so v$ver cannot update the Windows app package (see above)." -ForegroundColor Red }
+# Installers for in-app updates are served from the release host (release-host.txt, R2) or - when that file is missing - from the GitHub 'ota' release,
+# which only works while the repository is public (anonymous downloads).
+$useGh = $false
+if (($haveSetup -or $haveApk) -and -not (Test-Path $relFile)) {
+  $ErrorActionPreference = 'Continue'; $vis = ([string](& gh.exe repo view $repoSlug --json visibility --jq .visibility 2>$null)).Trim(); $ErrorActionPreference = 'Stop'
+  if ($vis -eq 'PUBLIC') { $useGh = $true; Write-Host "Installers will be offered from the public GitHub release of $repoSlug." -ForegroundColor DarkGray }
+  else { Write-Host "Note: installers are NOT offered for in-app updates (no release-host.txt, and $repoSlug is private). Copy release-host.txt from your other PC, or: gh repo edit $repoSlug --visibility public --accept-visibility-change-consequences" -ForegroundColor Yellow }
 }
-$skipInst = (Test-Path (Join-Path $root 'skip-installer-upload.txt')) -and -not $cloudWin
-$instOk = $true
-if (($haveSetup -or $haveApk) -and $useGh) {
-  if ($skipInst) { $instOk = $false; Write-Host 'skip-installer-upload.txt exists: installers NOT uploaded, so apps cannot install an app-package update this time. Delete that file to enable it.' -ForegroundColor Yellow }
-  else {
-    if ($haveApk -or -not $cloudWin) { $upRes = @(Publish-OtaInstallers $ver $outDir -ApkOnly:$cloudWin); $instOk = ($upRes.Count -gt 0 -and $upRes[-1] -eq $true) }
-    if ($cloudWin -and -not $haveSetup) { $instOk = $false }
-  }
-  if (-not $instOk) { Write-Host "`nWARNING: v$ver is published as a WEB-ONLY update (the app installers are not on GitHub). Apps will not install a new app package. Run it again from a faster connection." -ForegroundColor Red }
-}
-if (($haveSetup -or $haveApk) -and $instOk) {
-  # $rh (installer host) was chosen above
+if (($haveSetup -or $haveApk) -and ((Test-Path $relFile) -or $useGh)) {
+  $rh = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim().TrimEnd('/') } else { "https://github.com/$repoSlug/releases/download/ota" }
   $native = [ordered]@{ version = $ver }
   foreach ($item in @(@('windows', $setupName, $haveSetup), @('android', $apkName, $haveApk))) {
     if (-not $item[2]) { continue }
     $file = Join-Path $outDir $item[1]
-    $h = if ($item[0] -eq 'windows' -and $cloudInfo -and $cloudInfo.ok) { $cloudInfo.setupSha } else { (Get-FileHash $file -Algorithm SHA256).Hash.ToLower() }
-    if (-not $useGh) {   # R2 host (release-host.txt); with the GitHub host the files were uploaded above
-      Push-Location (Join-Path $root 'cloudflare')
-      try { & npx wrangler r2 object put "nexadesk-releases/$($item[1])" --file $file --remote; $code = $LASTEXITCODE } finally { Pop-Location }
-      if ($code) { throw "Upload of $($item[1]) to the release host failed" }
-    }
+    $h = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+    if (-not (Test-Path $relFile)) { $native[$item[0]] = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }; continue }   # GitHub release: uploaded by the release step below
+    Push-Location (Join-Path $root 'cloudflare')
+    try { & npx wrangler r2 object put "nexadesk-releases/$($item[1])" --file $file --remote; $code = $LASTEXITCODE } finally { Pop-Location }
+    if ($code) { throw "Upload of $($item[1]) to the release host failed" }
     $native[$item[0]] = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }
   }
 }
 if (-not $native -and $liveNow -and $liveNow.native) { $native = $liveNow.native; Write-Host "Keeping the app-installer info of v$($native.version) in the manifest (no new installers in this run)." -ForegroundColor DarkGray }
-$manifest = [ordered]@{ version = $ver; bundle = "www-$ver.zip"; sha256 = $sha; server = $server; released = (Get-Date).ToUniversalTime().ToString('o'); trust = @($keys.Trust); keyId = "$legacyId"; force = (-not $NoForce); notes = $(if ($Notes) { $Notes.Substring(0, [Math]::Min(300, $Notes.Length)) } else { '' }); native = $native } | ConvertTo-Json -Depth 5
+$manifest = [ordered]@{ version = $ver; bundle = "www-$ver.zip"; sha256 = $sha; server = $server; released = (Get-Date).ToUniversalTime().ToString('o'); mirrors = [ordered]@{ web = "https://raw.githubusercontent.com/$repoSlug/HEAD/ota/"; app = "https://github.com/$repoSlug/releases/download/ota/" }; trust = @($keys.Trust); keyId = "$legacyId"; force = [bool]$Force; native = $native } | ConvertTo-Json -Depth 5
 $manifestPath = Join-Path $build 'update.json'
 [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding $false))
 $sigPath = Join-Path $build 'update.sig'; $sig2Path = Join-Path $build 'update.sig2'
@@ -94,6 +98,7 @@ if ($legacyId) { & node "$PSScriptRoot\sign-manifest.js" sign $manifestPath $leg
 # ---- 2) GitHub: erase old packages, add new, sync source ----
 Write-Host "Publishing v$ver to GitHub..." -ForegroundColor Cyan
 $clone = Join-Path $build 'repo'
+[void](Invoke-Gh auth setup-git)   # lets git use the GitHub CLI login (private repositories)
 Invoke-Git clone --depth 1 $repoUrl $clone
 $ota = Join-Path $clone 'ota'; New-Item -ItemType Directory -Force $ota | Out-Null
 Get-ChildItem $ota -File | Remove-Item -Force
@@ -130,7 +135,7 @@ Get-ChildItem $pubDir -File | Where-Object { $_.Name -ne 'robots.txt' } | Remove
 Copy-Item @($zip, $manifestPath, $sig2Path) $pubDir -Force; if (Test-Path $sigPath) { Copy-Item $sigPath $pubDir -Force }
 
 # ---- 2b) GitHub release 'ota' (installers + APK of this version) ----
-Publish-OtaRelease $ver $relSha (Join-Path $root 'output') @($zip, $manifestPath, $sig2Path, $sigPath) -NoInstallers:$useGh
+Publish-OtaRelease $ver $relSha (Join-Path $root 'output')
 
 # ---- 3) server code (keeps /notify and protocol in sync) ----
 Write-Host 'Updating server...' -ForegroundColor Cyan
@@ -166,12 +171,3 @@ if ($live -and $selfOk -and (Test-Path $tokFile)) {
     Write-Host "`nv$ver is live. $($r.notified) online device(s) are updating right now." -ForegroundColor Green
   } catch { Write-Host "`nv$ver is live. Instant ping failed; devices will update within a minute." -ForegroundColor Yellow }
 } else { Write-Host "`nv$ver pushed. Devices will pick it up within a minute." -ForegroundColor Yellow }
-# last (it is the big one): the Portable exe, so it never delays the update that devices are waiting for
-if ($cloudWin -and $instOk) { Remove-OldWinAssets $ver }
-if ($useGh -and $instOk -and -not $cloudWin -and (Test-Path (Join-Path $outDir "NexaDesk-Portable-$ver.exe"))) { Write-Host 'Uploading the Portable exe (devices are already updating; you can close this window once it is done)...' -ForegroundColor Cyan; [void](@(Publish-OtaInstallers $ver $outDir -Portable)) }
-} catch {
-  Write-Host "`nRELEASE FAILED: $($_.Exception.Message)" -ForegroundColor Red
-  Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
-  exit 1
-}
-exit 0

@@ -5,17 +5,17 @@ Components
 - `app/www/`     Shared UI + WebRTC/crypto logic (used by both Windows and Android).
 - `desktop/`     Electron wrapper -> Windows EXE (installer + portable). Host AND viewer.
 - `android-app/` Capacitor wrapper -> signed APK. Viewer/controller (touch, on-screen keyboard).
-- `scripts/`     PowerShell build scripts. `START-HERE.bat` is the only launcher: one menu with every function.
+- `scripts/`     PowerShell build scripts. `START-HERE.bat` is a menu; `run-*.bat` are one-click launchers.
 
 ## Quick start (Windows PC)
 1. Install Node.js 22.12+ LTS (the build tools need it), Git for Windows, and (for the APK) JDK 17 + Android Studio SDK with `ANDROID_HOME` set.
-2. Double-click `START-HERE.bat` -> **2) AUTO full**. First run it logs in to Cloudflare (browser), creates the server, builds
+2. Double-click `START-HERE.bat` -> **1) FULL RELEASE**. First run it logs in to Cloudflare (browser), creates the server, builds
    `output\NexaDesk-Setup.exe` + `NexaDesk.apk`, pushes to GitHub (a sign-in window may appear once) and pings devices.
 3. Install the EXE / APK. ID and password are there immediately - no server to run, nothing to type.
-4. Later: **1) AUTO quick** for UI/logic changes (no rebuild, all devices update in seconds), **2) AUTO full** when native parts change, **3) MANUAL** to choose the version number yourself.
+4. Later: **2) QUICK UPDATE** for UI/logic changes (no rebuild, all devices update instantly), **1)** when native parts change.
 
 ## Hosting the server on Cloudflare (no VPS needed)
-`START-HERE.bat` (menu option 8; also runs automatically on the first release): it logs in, deploys `cloudflare/` as a Worker + Durable Object, creates the secret and prints your `wss://…workers.dev` URL. Do NOT upload `server/server.js` to Workers (it is Node-only). Optional Cloudflare TURN: `npx wrangler secret put TURN_KEY_ID` and `TURN_API_TOKEN`.
+`run-cloudflare.bat` (menu option 5; also runs automatically on the first release): it logs in, deploys `cloudflare/` as a Worker + Durable Object, creates the secret and prints your `wss://…workers.dev` URL. Do NOT upload `server/server.js` to Workers (it is Node-only). Optional Cloudflare TURN: `npx wrangler secret put TURN_KEY_ID` and `TURN_API_TOKEN`.
 
 ## Ways to connect across networks
 | Method | How |
@@ -25,7 +25,7 @@ Components
 | Unattended access | Permanent password (12+ chars), no prompt, optional |
 | Direct P2P / LAN | WebRTC picks the fastest path automatically (shown in the session bar) |
 | STUN hole-punching | Built in |
-| TURN relay | **Needed for phones on 5G/4G and most office/hotel networks**, which block direct connections. START-HERE option **T** sets up Cloudflare Realtime TURN once (you copy a key from the Cloudflare dashboard). Self-hosted alternative: coturn (`server/deploy/`) with the Node server. Settings > Server shows whether a relay is active. |
+| TURN relay (TCP/TLS) | For symmetric NAT / corporate firewalls: set up coturn (`server/deploy/`) and put the secret in `server/config.json` |
 
 ## Security model
 - Media + input travel over WebRTC (DTLS-SRTP, AES). The server and TURN only see ciphertext.
@@ -52,7 +52,7 @@ system privileges. That is a deliberate security decision, not something the app
   The daily key lives in your user profile (`%USERPROFILE%\.nexadesk\update-key.pem`), **not** in the project folder, so a new zip or
   a new project folder can never lose it or create a second one. Back it up once (password manager).
 - The first run creates `RECOVERY-MOVE-OFFLINE.pem` in the same folder: **move it to a password manager or USB stick and delete it
-  from the PC.** If the daily key is ever lost: `START-HERE.bat` option 4 (enter that file) publishes one release signed with it, creates a
+  from the PC.** If the daily key is ever lost: `run-update.bat -RecoveryKey <that file>` publishes one release signed with it, creates a
   new daily key, and every app picks up the new key list by itself - no reinstall.
 - Builds and publishes refuse to run when your key does not match what the devices trust (the message says how to fix it), so a
   release that devices would reject is never published.
@@ -63,31 +63,32 @@ system privileges. That is a deliberate security decision, not something the app
 - Quick updates keep the installer information of the last full release in `update.json`, and apps look at it on every check.
 - Apps installed **before** this scheme still demand a signature made with the key they were built with (`update.sig`). If that key
   file is in `signing\` (`update-private.pem` or `retired-*.pem`), publishing signs for those apps too, so they can take the update.
-  For a specific old key: `scripts\publish-ota.ps1 -AppKey <key id the device shows>`; `-AppKey none` stops it. Devices whose old key you no
+  For a specific old key: `run-update.bat -AppKey <key id the device shows>`; `-AppKey none` stops it. Devices whose old key you no
   longer have need one new Setup / APK, once.
 
-## Features (selection)
+## GitHub and installer hosting
+- The GitHub repository is `github-repo.txt` (owner/name), otherwise `papayasds-ai/Nexa-Remote-Desktop`, `papayasds-ai/NexaDesk` or `<your login>/NexaDesk` if one exists, otherwise
+  `<your login>/NexaDesk` is created (private). The scripts run `gh auth setup-git` so git can use your GitHub CLI login.
+- In-app installer updates need the installers to be downloadable without a login: either `release-host.txt` (public R2 URL; copy it from
+  your other PC) or a **public** repository (installers come from its `ota` release). With neither, devices still get instant screen updates
+  and you install new Setup / APK files by hand. Make the repo public with: `gh repo edit <owner/name> --visibility public --accept-visibility-change-consequences`.
+
+## New in this version
 - **Quality presets** in the session bar (Auto / Smooth / Sharp): Smooth lowers the bitrate for slow connections, Sharp raises it for text.
 - **Saved PCs can be renamed** (the pencil button) and the **Recent** list shows your last connections.
 - **Lock this PC when a remote session ends** (Security tab, off by default): presses Win+L on the host after a session in which control was allowed.
-- **Keep this PC awake**, **Start with Windows (minimized)** and **Keep running in the system tray** (Settings > This PC, Windows app only).
-- **Smooth remote control**: 60 fps capture that favours frame rate, an unordered fast channel for mouse moves, newest-move-wins on the host, and a pre-started input helper.
-- **Release notes**: whatever you type as notes when publishing is shown to users under Settings > Version.
+- **Keep this PC awake** and **Start with Windows (minimized)** (Settings tab, Windows app only; needs app package 1.0.15 or newer).
+- App-package updates (EXE) are now offered on every check, not only when the web layer changed.
 
-## Updating the app - two procedures
-Everything is published from **START-HERE.bat**. Every update is described by three independent choices:
-
-| Choice | Options | Meaning |
-|---|---|---|
-| Version number | **AUTO** or **MANUAL** | AUTO (menu 1, 2): the next number above the highest of this folder's `VERSION` and the live version. If `VERSION` is already ahead of what is live, that number is used as it is. MANUAL (menu 3): you type the number; it must be higher than the live one (devices never install a lower or equal version). |
-| Scope | **QUICK** or **FULL** | QUICK: UI/logic only (`app\www`), no rebuild, devices update in seconds. FULL: also rebuilds the EXE + APK, needed after changes in `desktop\` or the Android plugins. |
-| Delivery | **FORCED** or **NORMAL** | FORCED (default): every device installs it after a short warning, whatever its setting. NORMAL (manual mode answers "n"): each device follows its own setting. |
-
-- **Hands-free auto-release** (menu 4 on / 5 off): every 10 minutes the PC checks the project. `app\www` changed -> quick update; `desktop\` changed -> full update. Version number automatic, forced. Log: `build\auto-release.log`.
-- **R) Recovery key**: quick update signed with the offline recovery key, only if the daily key is lost.
-- **Why "three modes"?** They are not three update systems but what a device can do: **Forced** (the release is marked forced), **Automatic** (Settings > Version > *Install updates automatically*, on by default: installs when idle) and **Manual** (that setting off: the update is downloaded and waits for the *Install update* button). Forced always wins; nothing ever interrupts a live session except a forced update after its warning.
-- **Native packages:** the Windows app downloads the new Setup from your release host, checks its SHA-256 and installs it silently. Android cannot install an APK silently, so the app shows a download link.
-- Setup builds use `compression: store` and keep only the English locale, so Portable starts faster; Portable still unpacks to `%TEMP%\NexaDeskPortable` on every launch (exclude that folder in Defender, or use the Setup / unpacked ZIP).
+## Automatic and forced updates
+- **Automatic releases (web layer):** run `scripts\install-auto-release.ps1` once. Every 10 minutes the PC checks `app\www`;
+  if it changed, the script checks the syntax and publishes a new version. Turn it off with `install-auto-release.ps1 -Remove`.
+  Log: `build\auto-release.log`. Anything saved in `app\www` reaches devices within about 10 minutes, so keep it working.
+- **Forced updates:** `run-update.bat -Force` publishes a release that every device installs, even with **Install updates
+  automatically** turned off. Devices show a 30-second warning, then disconnect active sessions and install.
+- **Automatic checks:** devices check every minute. Without the forced flag, manual mode still waits for the Install button.
+- **Native updates:** the Windows app downloads the new Setup from your release host, checks its SHA-256 and installs it silently
+  when idle. Android does not allow silent APK installs, so the app shows a download link for the new APK.
 
 ## Security review (what was checked)
 - Electron runtime upgraded from 31.7.7 (end of support, high-severity advisory) to 45.2.3. The shipped runtime audits clean.
@@ -140,11 +141,15 @@ Everything is published from **START-HERE.bat**. Every update is described by th
   the new UI/logic immediately - never in the middle of a remote session. Devices also re-check every minute and whenever you open the app.
 - Android: the bundle is applied by the Capgo updater with automatic rollback if the new bundle fails to boot. Windows: bundle unpacked
   to the user profile, falls back to the installer's bundle if it fails to load.
-- Changes to native parts (Electron main/preload, input helper, Android plugins) need a new EXE/APK: use option 2.
-  UI/logic changes: option 1 is enough.
+- Changes to native parts (Electron main/preload, input helper, Android plugins) need a new EXE/APK: use option 1.
+  UI/logic changes: option 2 is enough.
 - Integrity and authenticity: `update.json` is signed (RSA-3072) with your daily or recovery key; the apps reject anything else, so a
   hacked Cloudflare or GitHub account cannot push code to your devices. The bundle and installers must also match the SHA-256 in the
   signed manifest. Keep the keys in your profile / password manager, never on a public repo.
+- Automatic vs manual: Settings -> Version has **Install updates automatically**. On (default): updates are downloaded and applied
+  when the app is idle. Off: the app still downloads a pushed release and shows **Install update**, which you press yourself.
+  Manual **Check for updates** always works. Updates never interrupt a live session.
+
 ## Repo visibility
 Keep the repo private. Source code is not secret from the apps (they can be decompiled), but it does show the protocol and
 the build process. Updates no longer depend on GitHub, so a private repo works. GitHub holds the source and the installer

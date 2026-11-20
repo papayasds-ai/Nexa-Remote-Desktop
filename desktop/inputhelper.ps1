@@ -1,4 +1,3 @@
-try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'AboveNormal' } catch { }   # stay responsive while the PC is busy encoding the screen
 # NexaDesk input helper: reads whitelisted commands from stdin and injects mouse/keyboard events.
 Add-Type -TypeDefinition @"
 using System; using System.Runtime.InteropServices;

@@ -1,7 +1,7 @@
 {
   "name": "nexadesk",
   "productName": "NexaDesk",
-  "version": "1.0.30",
+  "version": "1.0.92",
   "description": "NexaDesk secure remote desktop",
   "author": "NexaDesk",
   "main": "main.js",
@@ -17,10 +17,6 @@
     "appId": "com.nexadesk.desktop",
     "productName": "NexaDesk",
     "asar": true,
-    "compression": "store",
-    "electronLanguages": [
-      "en-US"
-    ],
     "files": [
       "main.js",
       "preload.js",
@@ -54,9 +50,6 @@
       "allowToChangeInstallationDirectory": true,
       "artifactName": "NexaDesk-Setup-${version}.exe"
     },
-    "portable": {
-      "artifactName": "NexaDesk-Portable-${version}.exe"
-    },
     "directories": {
       "output": "dist"
     },
@@ -65,11 +58,14 @@
         "provider": "generic",
         "url": "https://updates.invalid/nexadesk"
       }
-    ]
+    ],
+    "portable": {
+      "artifactName": "NexaDesk-Portable-${version}.exe"
+    }
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/papayasds-ai/Nexa-Remote-Desktop.git"
+    "url": "https://github.com/papayasds-ai/NexaDesk.git"
   },
   "overrides": {
     "@electron/asar": "^4.3.1",

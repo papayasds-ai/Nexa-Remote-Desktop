@@ -24,9 +24,7 @@ if (-not (Test-Path $webStamp) -or -not (Test-Path $nativeStamp)) {
 $webChanged = (Get-Content $webStamp -Raw).Trim() -ne $webNow
 $nativeChanged = (Get-Content $nativeStamp -Raw).Trim() -ne $nativeNow
 if (-not $webChanged -and -not $nativeChanged) { exit 0 }
-if (Test-Path $lock) { if (((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes -lt 90) { exit 0 }; Remove-Item $lock -Force -ErrorAction SilentlyContinue; Log 'stale lock removed' }
-$failStamp = Join-Path $build 'auto-release.failed'; $combined = $webNow + $nativeNow
-if ((Test-Path $failStamp) -and ((Get-Content $failStamp -Raw).Trim() -eq $combined)) { exit 0 }   # this exact content already failed: wait for a new change instead of retrying every 10 minutes
+if (Test-Path $lock) { exit 0 }
 & node --check (Join-Path $root 'app\www\app.js'); if ($LASTEXITCODE) { Log 'app.js has a syntax error - not published'; exit 1 }
 & node --check (Join-Path $root 'desktop\main.js'); if ($LASTEXITCODE) { Log 'main.js has a syntax error - not published'; exit 1 }
 
@@ -34,17 +32,12 @@ New-Item -ItemType File -Force $lock | Out-Null
 try {
   if ($nativeChanged) {
     & "$PSScriptRoot\release-all.ps1"
-    if ($LASTEXITCODE) { throw "release-all.ps1 exit $LASTEXITCODE" }
     Log 'native sources changed: full release built and published'
   } else {
     & "$PSScriptRoot\publish-ota.ps1"
-    if ($LASTEXITCODE) { throw "publish-ota.ps1 exit $LASTEXITCODE" }
     Log 'web layer changed: update published'
   }
   $webNow | Set-Content $webStamp -Encoding ASCII; $nativeNow | Set-Content $nativeStamp -Encoding ASCII
-  Remove-Item $failStamp -Force -ErrorAction SilentlyContinue
 } catch {
-  $combined | Set-Content $failStamp -Encoding ASCII
   Log ('release failed: ' + $_.Exception.Message); exit 1
 } finally { Remove-Item $lock -Force -ErrorAction SilentlyContinue }
-exit 0

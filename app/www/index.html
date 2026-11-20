@@ -39,8 +39,8 @@
         </div>
         <div class="card wide">
           <h2>Saved PCs</h2>
-          <p class="hint">Saves the ID, and the password too if it is typed in the box (kept on this device only, so keep your phone locked). A saved password means one tap to connect (🔑). Do not save one-time invite codes.</p>
-          <div class="row"><button id="savePc">Save this PC</button></div>
+          <p class="hint">Saves the ID only. Passwords and invite codes are never stored.</p>
+          <div class="row"><button id="savePc">Save this partner ID</button></div>
           <div id="savedPcs" class="list"></div>
           <div class="lbl">Recent</div>
           <div id="recentPcs" class="list"></div>
@@ -88,17 +88,13 @@
     <section id="tab-set" hidden>
       <div class="card">
         <h2>Server</h2>
-        <div id="relayInfo" class="hint"></div>
         <div class="lbl">Signaling server URL</div>
         <input id="srvUrl" placeholder="wss://remote.example.com">
         <div class="lbl">Extra ICE/TURN servers (optional JSON array)</div>
         <textarea id="extraIce" rows="3" placeholder='[{"urls":"turn:host:3478","username":"u","credential":"p"}]'></textarea>
         <button class="primary" id="saveSet">Save &amp; reconnect</button>
-        <div class="lbl">Version</div><div id="verInfo"></div><div id="bundleInfo" class="hint"></div><div id="updBox" class="hint"></div><button id="chkUpd">Check for updates</button>
-        <label class="chk"><input type="checkbox" id="autoUpd"> Install updates automatically when this device is idle</label>
-        <p class="hint" id="updModeHint"></p>
-        <p class="hint">Exception: a release the publisher marks <b>FORCED</b> installs on every device after a short warning (30 s during a session, 5 s when idle), whatever this setting says.</p>
-        <div id="notesBox" class="hint"></div>
+        <div class="lbl">Version</div><div id="verInfo"></div><div id="bundleInfo" class="hint"></div><div id="updBox" class="hint"></div><div id="dlBar" class="dlbar" hidden><i></i></div><button id="chkUpd">Check for updates</button>
+        <label class="chk"><input type="checkbox" id="autoUpd"> Install updates automatically</label>
         <button class="primary" id="installUpd" hidden>Install update</button>
         <div id="nativeBox" class="hint"></div>
         <button class="primary" id="installNative" hidden>Install app update</button>
@@ -109,7 +105,6 @@
         <h2>This PC</h2>
         <label class="chk"><input type="checkbox" id="optAwake"> Keep this PC awake while NexaDesk is running (so you can always reach it)</label>
         <label class="chk"><input type="checkbox" id="optAutostart"> Start NexaDesk (minimized) when I sign in to Windows</label>
-        <label class="chk"><input type="checkbox" id="optTray"> Keep running in the system tray when I close the window (this PC stays reachable)</label>
         <p class="hint">The screen may still turn off. Keeping the PC awake uses more power on a laptop.</p>
       </div>
     </section>
@@ -127,19 +122,16 @@
     <span id="sesInfo">Connecting…</span>
     <span class="sp"></span>
     <label class="sens">Speed <input id="sens" type="range" min="1" max="6" step="0.5"></label>
-    <label class="sens">Quality <select id="quality"><option value="auto">Auto</option><option value="smooth">Smooth</option><option value="sharp">Sharp</option><option value="lowdata">Low data</option></select></label>
+    <label class="sens">Quality <select id="quality"><option value="auto">Auto</option><option value="smooth">Smooth</option><option value="sharp">Sharp</option></select></label>
     <button id="btnKbd">Keyboard</button>
     <button id="btnClip">Send clipboard</button>
     <button id="btnPcClip">Get PC clipboard</button>
-    <button id="btnAutoClip" title="Copy text on one device and paste on the other automatically">Auto clipboard: off</button>
     <button id="btnSwitch">Switch PC</button>
     <button id="btnFit">Fit/100%</button>
-    <button id="btnZoom" title="Reset zoom (pinch the screen to zoom)">100%</button>
     <button id="btnFs">Fullscreen</button>
     <button id="btnEnd" class="danger">End</button>
   </div>
   <div class="stage"><video id="vid" autoplay playsinline muted tabindex="0"></video></div>
-  <button id="tbToggle" class="fab" aria-label="Show or hide controls" aria-expanded="false">&#9776;</button>
   <div class="padbar" id="padBar" hidden>
     <button id="tpLeft">Left click</button>
     <button id="tpHold">Hold / drag</button>
@@ -156,12 +148,7 @@
       <button data-combo="esc">Esc</button>
       <button data-combo="printscreen">Print Screen</button>
     </div>
-    <div class="modbar" id="modBar">
-      <button data-mod="17">Ctrl</button><button data-mod="18">Alt</button><button data-mod="16">Shift</button><button data-mod="91">Win</button><button id="fnToggle">F1-12</button>
-    </div>
-    <div class="keyrow" id="keyRow"></div>
-    <div class="keyrow" id="fnRow" hidden></div>
-    <div class="tphint">Drag anywhere on the screen = move &middot; Tap = click &middot; Tap twice and drag = drag &middot; Two fingers = scroll &middot; Pinch = zoom, then two fingers = pan &middot; Two-finger tap or press-and-hold = right click</div>
+    <div class="tphint">Drag anywhere on the screen = move &middot; Tap = click &middot; Tap twice and drag = drag &middot; Two fingers = scroll &middot; Two-finger tap or press-and-hold = right click</div>
   </div>
   <input id="kbd" class="kbd" autocomplete="off" autocapitalize="off" spellcheck="false">
 </div>
@@ -174,7 +161,6 @@
   <div class="row"><button id="mdNo">Deny</button><button id="mdYes" class="primary">Allow</button></div>
 </div></div>
 <div id="toast"></div>
-<div id="updDock"><div id="updProg" class="prog" hidden><div id="updMsg"></div><a id="updApk" href="#" target="_blank" hidden>Download &amp; install the app update</a><div class="progTop"><span id="progLbl"></span><span id="progPct"></span></div><div class="progBar"><div id="progFill"></div></div><div class="progSub"><span id="progSize"></span><span id="progSpeed"></span></div></div></div>
 <script src="config.js"></script>
 <script src="update-keys.js"></script>
 <script src="app.js"></script>

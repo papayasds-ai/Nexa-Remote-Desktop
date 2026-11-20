@@ -1,0 +1,66 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261116141645
+Username: DESKTOP-9RM0TJQ\Hamza
+RunAs User: DESKTOP-9RM0TJQ\Hamza
+Configuration Name: 
+Machine: DESKTOP-9RM0TJQ (Microsoft Windows NT 10.0.26300.0)
+Host Application: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update.ps1 -Mode auto -Scope full
+Process ID: 11980
+PSVersion: 5.1.26100.9818
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9818
+BuildVersion: 10.0.26100.9818
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+  Update keys: daily d90ea841dfdb9803 + recovery 047d1bba55ce3069
+  KEYID=d90ea841dfdb9803
+  TRUST=d90ea841dfdb9803,047d1bba55ce3069
+
+up to date in 982ms
+npm warn install-scripts 1 package has install scripts not yet covered by allowScripts:
+npm warn install-scripts   electron-winstaller@5.4.0 (install: node ./script/select-7z-arch.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+Code signing: no certificate (signing\codesign.pfx), the EXE will be unsigned
+
+> nexadesk@1.0.91 dist
+> electron-builder --win nsis portable --x64 --publish never
+
+  • electron-builder  version=26.18.0 os=10.0.26300
+  • loaded configuration  file=package.json ("build" field)
+  • writing effective config  file=dist\builder-effective-config.yaml
+  • executing @electron/rebuild  electronVersion=45.2.3 arch=x64 buildFromSource=false workspaceRoot=C:\Users\Hamza\Downloads\NexaDesk\NexaDesk\desktop projectDir=./ appDir=./
+  • installing native dependencies  arch=x64
+  • completed installing native dependencies
+  • packaging       platform=win32 arch=x64 electron=45.2.3 appOutDir=dist\win-unpacked
+  • downloading     label=electron
+    [====================================================================================================] 100% | electron
+  • downloaded electron zip extracted successfully  output=C:\Users\Hamza\Downloads\NexaDesk\NexaDesk\desktop\dist\win-unpacked
+  • searching for node modules  pm=npm searchDir=C:\Users\Hamza\Downloads\NexaDesk\NexaDesk\desktop
+  • no node modules found in collection, trying next search directory  pm=npm searchDir=C:\Users\Hamza\Downloads\NexaDesk\NexaDesk\desktop
+  • searching for node modules  pm=traversal searchDir=C:\Users\Hamza\Downloads\NexaDesk\NexaDesk\desktop
+  • using manual traversal of node_modules to build dependency tree
+  • no node modules found in collection, trying next search directory  pm=traversal searchDir=C:\Users\Hamza\Downloads\NexaDesk\NexaDesk\desktop
+  • no node modules returned while searching directories  searchDirectories=[""]
+  • updating asar integrity executable resource  executablePath=dist\win-unpacked\NexaDesk.exe
+  • no code signing certificate configured, signing is skipped  path=dist\win-unpacked\NexaDesk.exe
+  • building        target=nsis file=dist\NexaDesk-Setup-1.0.91.exe archs=x64 oneClick=false perMachine=false
+  • no code signing certificate configured, signing is skipped  path=C:\Users\Hamza\AppData\Local\Temp\t-Aul2ad\elevate-staging-1\resources\elevate.exe
+  • no code signing certificate configured, signing is skipped  path=dist\NexaDesk-Setup-1.0.91.__uninstaller.exe
+  • no code signing certificate configured, signing is skipped  path=dist\NexaDesk-Setup-1.0.91.exe
+  • building block map  blockMapFile=dist\NexaDesk-Setup-1.0.91.exe.blockmap
+  • building        target=portable file=dist\NexaDesk-Portable-1.0.91.exe archs=x64
+  • no code signing certificate configured, signing is skipped  path=C:\Users\Hamza\AppData\Local\Temp\t-Aul2ad\elevate-staging-4\resources\elevate.exe
+  • no code signing certificate configured, signing is skipped  path=dist\NexaDesk-Portable-1.0.91.exe
+  NexaDesk-Setup-1.0.91.exe  (file version inside: 1.0.91)
+  NexaDesk-Portable-1.0.91.exe  (file version inside: 1.0.91)
+
+Done (v1.0.91). Windows builds are in: C:\Users\Hamza\Downloads\NexaDesk\NexaDesk\output
+**********************
+Windows PowerShell transcript end
+End time: 20261116141730
+**********************

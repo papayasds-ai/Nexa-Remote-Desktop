@@ -2,7 +2,6 @@
 param([switch]$NoBump, [string]$ServerUrl = "")
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$ownLog = $false; try { New-Item -ItemType Directory -Force (Join-Path $root 'logs') | Out-Null; Start-Transcript -Path (Join-Path $root 'logs\build-windows.log') -Force | Out-Null; $ownLog = $true } catch { }   # full build output is saved to logs\build-windows.log
 . "$PSScriptRoot\common.ps1"
 Initialize-UpdateKeys $root | Out-Null
 foreach ($c in 'node', 'npm') { if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { throw "$c not found. Install Node.js 18+ LTS from https://nodejs.org" } }
@@ -22,7 +21,7 @@ $origin = ($ServerUrl -replace '^wss://', 'https://' -replace '^ws://', 'http://
 $idx = Join-Path $desk 'www\index.html'; [IO.File]::WriteAllText($idx, [IO.File]::ReadAllText($idx).Replace('__OTA_ORIGIN__', $origin), (New-Object Text.UTF8Encoding $false))
 $prefix = if ($origin -match '^https://') { "$origin/" } else { '' }
 $relFile = Join-Path $root 'release-host.txt'
-$relPrefix = (Get-ReleaseHost $root).TrimEnd('/') + '/'   # trusted installer host baked into THIS build: release-host.txt, otherwise the GitHub release 'ota' (an empty value here made the app refuse every app-package update)
+$relPrefix = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim().TrimEnd('/') + '/' } else { $g = Resolve-GitHubRepo $root -Create; if ($g) { "https://github.com/$g/releases/download/ota/" } else { '' } }
 [IO.File]::WriteAllText((Join-Path $desk 'build-config.json'), (@{ otaPrefix = $prefix; releasePrefix = $relPrefix } | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
 
 Push-Location $desk
@@ -51,6 +50,21 @@ try {
     Write-Host ("  {0}  (file version inside: {1})" -f (Split-Path $c -Leaf), $fv) -ForegroundColor DarkGray
     if ($fv -notlike "$ver*") { Write-Host "  WARNING: version inside the EXE is '$fv', expected $ver" -ForegroundColor Yellow }
   }
-  Get-ChildItem $out -Filter 'NexaDesk-Portable-*.zip' -ErrorAction SilentlyContinue | Remove-Item -Force   # the portable build is now the single-file Portable .exe
+  # Fast portable: the unpacked app folder as a ZIP. Extract it anywhere and run NexaDesk.exe - it starts instantly, because nothing is unpacked at launch
+  # (the Portable .exe unpacks ~150 MB into a temp folder on EVERY launch, and Windows scans all of it each time).
+  try {
+    $unpacked = Join-Path (Get-Location).Path 'dist\win-unpacked'
+    if (Test-Path (Join-Path $unpacked 'NexaDesk.exe')) {
+      Get-ChildItem $out -Filter 'NexaDesk-Portable-*.zip' -ErrorAction SilentlyContinue | Remove-Item -Force
+      $pz = Join-Path $out "NexaDesk-Portable-$ver.zip"
+      $stage = Join-Path $env:TEMP 'nexadesk-zip-stage'; Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+      New-Item -ItemType Directory -Force $stage | Out-Null
+      Copy-Item $unpacked (Join-Path $stage 'NexaDesk') -Recurse
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $pz, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+      Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+      Write-Host "  NexaDesk-Portable-$ver.zip  (fast portable: extract anywhere, run NexaDesk.exe)" -ForegroundColor DarkGray
+    }
+  } catch { Write-Host "  Could not create the portable ZIP: $($_.Exception.Message)" -ForegroundColor Yellow }
   Write-Host "`nDone (v$ver). Windows builds are in: $out" -ForegroundColor Green
-} finally { Pop-Location; if ($ownLog) { try { Stop-Transcript | Out-Null } catch { } } }
+} finally { Pop-Location }

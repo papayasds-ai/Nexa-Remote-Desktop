@@ -21,12 +21,7 @@ const fail = msg => { bad = true; console.log('PROBLEM: ' + msg); };
   const q = '?t=' + Date.now();
   let m, text;
   try {
-    let r;   // a fresh deploy can take a few seconds to reach every Cloudflare edge: retry before calling it a failure
-    for (let i = 0; i < 10; i++) {
-      r = await fetch(origin + '/update.json?t=' + Date.now(), { cache: 'no-store' });
-      if (r.ok) break;
-      await new Promise(ok => setTimeout(ok, 3000));
-    }
+    const r = await fetch(origin + '/update.json' + q, { cache: 'no-store' });
     if (!r.ok) { fail('update.json answered HTTP ' + r.status + '. Run a quick update (option 2) once.'); return; }
     text = await r.text(); m = JSON.parse(text);
   } catch (e) { fail('cannot read ' + origin + '/update.json: ' + e.message); return; }

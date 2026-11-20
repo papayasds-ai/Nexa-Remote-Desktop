@@ -5,10 +5,6 @@
 const ROUTED = new Set(['req', 'chal', 'auth', 'deny', 'sig', 'bye']);
 const clip = (v, n) => (typeof v === 'string' ? v.slice(0, n) : undefined);
 
-// Optional fixed TURN servers (secret TURN_STATIC = JSON array, e.g. ExpressTURN/Metered/own coturn with static credentials). Never stored in the repo.
-function staticTurn(env) {
-  try { const a = JSON.parse(env.TURN_STATIC || '[]'); return (Array.isArray(a) ? a : []).filter(s => s && s.urls && s.username && s.credential).slice(0, 6); } catch (_) { return []; }
-}
 function safeEq(a, b) { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0; }
 
 export default {
@@ -27,7 +23,7 @@ export default {
       if (!env.OTA_NOTIFY_TOKEN || !safeEq(got, 'Bearer ' + env.OTA_NOTIFY_TOKEN)) return new Response('forbidden', { status: 403 });
       return env.HUB.get(env.HUB.idFromName('hub')).fetch(new Request('https://hub/broadcast', { method: 'POST', body: (await req.text()).slice(0, 2000) }));
     }
-    if (url.pathname === '/health') return new Response(JSON.stringify({ ok: true, turn: !!(env.TURN_KEY_ID && env.TURN_API_TOKEN) || staticTurn(env).length > 0 }), { headers: { 'content-type': 'application/json' } });   // turn: is a relay configured?
+    if (url.pathname === '/health') return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('NexaDesk signaling server', { status: 200 });
     return env.HUB.get(env.HUB.idFromName('hub')).fetch(req);
   }
@@ -67,7 +63,6 @@ export class Hub {
         if (r.ok) { const j = await r.json(); (j.iceServers || []).forEach(s => { if (s.username) list.push(s); }); }
       } catch (_) {}
     }
-    staticTurn(this.env).forEach(s => list.push(s));   // fallback / extra relays
     return list;
   }
 

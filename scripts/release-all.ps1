@@ -1,9 +1,8 @@
 # One-click: make sure the server exists, bump version, build EXE + APK, publish OTA to GitHub, ping all devices.
-param([switch]$AllowInsecure, [string]$Version = '', [switch]$NoForce, [string]$Notes = '')   # -Version: MANUAL number (otherwise AUTO)
+param([switch]$AllowInsecure)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\common.ps1"   # also refreshes PATH, so freshly installed tools are found
-try {
 # Preflight: check everything the release needs BEFORE the long builds and list what is missing in one go.
 $need = @()
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { $need += 'Node.js 18+        ->  winget install OpenJS.NodeJS.LTS' }
@@ -18,19 +17,11 @@ if (-not (Get-Command java -ErrorAction SilentlyContinue)) { Write-Host "Note: J
 $urlFile = Join-Path $root 'server-url.txt'
 if (-not (Test-Path $urlFile)) { & "$PSScriptRoot\deploy-cloudflare.ps1" }
 if (-not (Test-Path $urlFile)) { throw 'Server setup did not finish. Read the messages above.' }
-if ($Version) { & "$PSScriptRoot\bump-version.ps1" -Set $Version } else { & "$PSScriptRoot\bump-version.ps1" }
+& "$PSScriptRoot\bump-version.ps1"
 $u = (Get-Content $urlFile -Raw).Trim()
-if (Test-Path (Join-Path $root 'cloud-windows.txt')) { Write-Host 'Windows installers will be built on GitHub (cloud-windows.txt exists): skipping the slow local Windows build.' -ForegroundColor Cyan }
-else { & "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump }
+& "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump
 try {
   if ($AllowInsecure) { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump -AllowInsecure } else { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump }
 } catch { Write-Host "`nAndroid build skipped: $($_.Exception.Message)" -ForegroundColor Yellow }
-$pubArgs = @{ NoBump = $true }; if ($NoForce) { $pubArgs.NoForce = $true }; if ($Notes) { $pubArgs.Notes = $Notes }
-& "$PSScriptRoot\publish-ota.ps1" @pubArgs
-if ($LASTEXITCODE) { throw "publish-ota.ps1 failed (exit $LASTEXITCODE)" }
+& "$PSScriptRoot\publish-ota.ps1" -NoBump
 Write-Host "`nAll done. Installers are in output\" -ForegroundColor Green
-} catch {
-  Write-Host "`nRELEASE FAILED: $($_.Exception.Message)" -ForegroundColor Red
-  exit 1
-}
-exit 0

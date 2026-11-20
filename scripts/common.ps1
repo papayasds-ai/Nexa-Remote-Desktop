@@ -41,6 +41,30 @@ function Get-PublishedManifest([string]$root) {
   }
 }
 
+# GitHub repository (owner/name) for the source sync, the 'ota' release and the backup downloads.
+# github-repo.txt wins; otherwise the first of papayasds-ai/Nexa-Remote-Desktop, papayasds-ai/NexaDesk or <your gh login>/NexaDesk that exists; with -Create a missing
+# <your gh login>/NexaDesk is created (private). Returns '' when GitHub CLI is missing / not logged in.
+function Resolve-GitHubRepo([string]$root, [switch]$Create) {
+  $f = Join-Path $root 'github-repo.txt'
+  if (Test-Path $f) { $s = (Get-Content $f -Raw).Trim(); if ($s -match '^[\w.-]+/[\w.-]+$') { return $s } }
+  if (-not (Get-Command gh.exe -ErrorAction SilentlyContinue)) { return '' }
+  $ErrorActionPreference = 'Continue'
+  $login = ([string](& gh.exe api user --jq .login 2>$null)).Trim()
+  $ErrorActionPreference = 'Stop'
+  if (-not $login) { return '' }
+  foreach ($c in @('papayasds-ai/Nexa-Remote-Desktop', 'papayasds-ai/NexaDesk', "$login/NexaDesk") | Select-Object -Unique) {
+    $ErrorActionPreference = 'Continue'; & gh.exe repo view $c *> $null; $ok = ($LASTEXITCODE -eq 0); $ErrorActionPreference = 'Stop'
+    if ($ok) { Set-Content $f $c -Encoding ASCII; return $c }
+  }
+  if (-not $Create) { return '' }
+  $slug = "$login/NexaDesk"
+  $ErrorActionPreference = 'Continue'; $out = & gh.exe repo create $slug --private --description 'NexaDesk' 2>&1; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'
+  if ($code) { throw "Could not create the GitHub repository ${slug}: $out" }
+  Write-Host "Created the private GitHub repository $slug" -ForegroundColor Green
+  Set-Content $f $slug -Encoding ASCII
+  return $slug
+}
+
 # Tools installed while a window (or Explorer) was already open are missing from its PATH. Reload PATH from Windows and add the usual
 # install folders, so Git, GitHub CLI, Node and the JDK are found without reopening anything. Runs whenever a script loads this file.
 function Sync-Path {
@@ -58,99 +82,3 @@ function Sync-Path {
   } catch { }   # never let this convenience break a script
 }
 Sync-Path
-
-# gh.exe (GitHub CLI) with stderr captured; returns its exit code. Output is kept in $script:ghOut.
-function Invoke-Gh { $ErrorActionPreference = 'Continue'; $script:ghOut = & gh.exe @args 2>&1; return $LASTEXITCODE }
-. "$PSScriptRoot\ota-assets.ps1"   # installer hosting helpers: Get-ReleaseHost, Publish-OtaInstallers
-
-# Uploads one file to the 'ota' release and shows a live progress bar + speed. The percentage is measured from the PC's network upload counter
-# (gh itself prints nothing when its output is not a terminal), so it is approximate; the speed number tells you if it is slow (a few MB/s) or stuck (~0).
-function Send-GhAsset([string]$file, [string]$repo) {
-  $size = (Get-Item $file).Length; $name = Split-Path $file -Leaf
-  $gh = (Get-Command gh.exe).Source
-  $nics = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object { $_.OperationalStatus -eq 'Up' -and $_.NetworkInterfaceType -ne 'Loopback' })
-  $sent = { $t = 0; foreach ($n in $nics) { try { $t += $n.GetIPv4Statistics().BytesSent } catch { } }; $t }
-  $base = & $sent; $last = $base; $t0 = Get-Date; $lastT = $t0; $lastPrint = $t0; $slowSince = $null
-  $p = Start-Process -FilePath $gh -ArgumentList @('release', 'upload', 'ota', '--repo', $repo, '--clobber', ('"' + $file + '"')) -NoNewWindow -PassThru
-  $null = $p.Handle
-  while (-not $p.HasExited) {
-    Start-Sleep -Seconds 2
-    $now = & $sent; $t = Get-Date
-    $speed = ($now - $last) / [math]::Max(0.5, ($t - $lastT).TotalSeconds); $last = $now; $lastT = $t
-    $done = [math]::Max(0, $now - $base); $pct = [math]::Min(99, [int](100 * $done / $size))
-    $el = [int]($t - $t0).TotalSeconds
-    $mbps = [math]::Round($speed / 1MB, 2)
-    if ($speed -lt 20KB) { if (-not $slowSince) { $slowSince = $t } } else { $slowSince = $null }
-    $state = if ($slowSince -and ($t - $slowSince).TotalSeconds -gt 45) { 'NO DATA FLOWING for ' + [int]($t - $slowSince).TotalSeconds + 's - looks stuck (check internet / gh auth)' } else { "$mbps MB/s" }
-    Write-Progress -Activity "Uploading $name ($([math]::Round($size / 1MB, 1)) MB)" -Status "$pct%   $state   elapsed ${el}s" -PercentComplete $pct
-    if (($t - $lastPrint).TotalSeconds -ge 15) { $lastPrint = $t; Write-Host "    $name  ~$pct%  $state  (${el}s)" -ForegroundColor $(if ($state -like 'NO DATA*') { 'Red' } else { 'DarkGray' }) }
-  }
-  Write-Progress -Activity "Uploading $name" -Completed
-  return $p.ExitCode
-}
-
-# Updates the GitHub release 'ota' IN PLACE. The release and its tag are NEVER deleted.
-#   1) create the release only if it does not exist yet, otherwise just refresh its title/notes
-#   2) upload the new files with --clobber (Setup exe + Portable exe + APK + signed manifest + web bundle)
-#   3) only AFTER the upload worked, delete outdated assets: NexaDesk-* binaries (when new binaries were uploaded) and old www-*.zip
-# -DryRun prints the plan and changes nothing (use scripts\test-ota-release.ps1).
-function Publish-OtaRelease([string]$ver, [string]$sha, [string]$outDir, [string[]]$extra = @(), [switch]$DryRun, [switch]$ForceInstallers, [switch]$NoInstallers) {
-  $repo = 'papayasds-ai/Nexa-Remote-Desktop'
-  $names = @("NexaDesk-Setup-$ver.exe", "NexaDesk-Portable-$ver.exe", "NexaDesk-$ver.apk")
-  $bins = @(Get-ChildItem $outDir -File -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.Name })
-  if ($NoInstallers) { $bins = @() }   # the installers were already uploaded and verified by Publish-OtaInstallers
-  # Slow upload line? While the file skip-installer-upload.txt exists in the project folder, the big .exe files are NOT uploaded (only the APK and the small update files);
-  # old exe assets stay in the release untouched. Delete that file (or use upload-release.ps1 -WithInstallers) when you are on a fast connection.
-  $skipFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'skip-installer-upload.txt'
-  $skipped = @()
-  if ((Test-Path $skipFile) -and -not $ForceInstallers) {
-    $skipped = @($bins | Where-Object { $_.Extension -eq '.exe' }); $bins = @($bins | Where-Object { $_.Extension -ne '.exe' })
-    if ($skipped) { Write-Host "Installer .exe files NOT uploaded (skip-installer-upload.txt exists): $(($skipped | ForEach-Object Name) -join ', '). Existing exe assets in the release are kept." -ForegroundColor Yellow }
-  }
-  $pruneRx = '^www-.*\.zip$'
-  if (@($bins | Where-Object { $_.Extension -eq '.exe' }).Count) { $pruneRx += '|^NexaDesk-.*\.(exe|blockmap)$' }
-  if (@($bins | Where-Object { $_.Extension -eq '.apk' }).Count) { $pruneRx += '|^NexaDesk-.*\.apk$' }
-  $files = New-Object System.Collections.ArrayList
-  foreach ($b in $bins) { [void]$files.Add($b.FullName) }
-  foreach ($e in $extra) { if ($e -and (Test-Path $e)) { [void]$files.Add($e) } }
-  if ($files.Count -eq 0) { Write-Host "GitHub 'ota' release left unchanged: nothing to upload for v$ver." -ForegroundColor Yellow; return }
-  if ($bins.Count -gt 0 -and ("NexaDesk-$ver.apk" -notin $bins.Name)) { Write-Host "Note: no Android APK for v$ver, so the release will not contain one." -ForegroundColor Yellow }
-  if ($bins.Count -gt 0 -and -not $skipped -and ("NexaDesk-Portable-$ver.exe" -notin $bins.Name)) { Write-Host "Note: no Portable exe for v$ver, so the release will not contain one." -ForegroundColor Yellow }
-  if (-not (Get-Command gh.exe -ErrorAction SilentlyContinue)) { Write-Host "GitHub 'ota' release NOT updated: GitHub CLI is not installed. Run: winget install GitHub.cli   then: gh auth login   then run this again." -ForegroundColor Red; return }
-  if ((Invoke-Gh auth status) -ne 0) { Write-Host "GitHub 'ota' release NOT updated: run 'gh auth login' once, then run this again." -ForegroundColor Red; return }
-  $keep = @($files | ForEach-Object { Split-Path $_ -Leaf })
-  $exists = ((Invoke-Gh release view ota --repo $repo) -eq 0)
-  $notes = "NexaDesk v$ver`n`nWindows: NexaDesk-Setup-$ver.exe (installer), NexaDesk-Portable-$ver.exe (no install needed)`nAndroid: NexaDesk-$ver.apk"
-  if ($DryRun) {
-    Write-Host "[dry-run] release 'ota' exists: $exists (it is never deleted)" -ForegroundColor Cyan
-    Write-Host "[dry-run] would upload (--clobber): $($keep -join ', ')" -ForegroundColor Cyan
-    if ($exists -and ((Invoke-Gh release view ota --repo $repo --json assets --jq '.assets[].name') -eq 0)) {
-      $stale = @($script:ghOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and ($keep -notcontains $_) -and ($_ -match $pruneRx) })
-      Write-Host "[dry-run] would delete only these outdated assets: $(if ($stale) { $stale -join ', ' } else { '(none)' })" -ForegroundColor Cyan
-    }
-    return
-  }
-  if (-not $exists) {
-    if ((Invoke-Gh release create ota --repo $repo --target $sha --title "NexaDesk v$ver" --notes $notes) -ne 0) { Write-Host "GitHub 'ota' release could not be created:`n$($script:ghOut)" -ForegroundColor Red; return }
-  } elseif ($bins.Count -gt 0) {
-    [void](Invoke-Gh release edit ota --repo $repo --title "NexaDesk v$ver" --notes $notes)   # cosmetic: a failure here is not fatal
-  }
-  # one file at a time, smallest first, with gh's own progress visible (it used to be captured silently, so a ~400 MB upload looked like a hang)
-  $upOk = $true
-  foreach ($f in @($files | Sort-Object { (Get-Item $_).Length })) {
-    $mb = [math]::Round((Get-Item $f).Length / 1MB, 1)
-    Write-Host "  uploading $(Split-Path $f -Leaf) ($mb MB) - big files take a few minutes, this is normal..." -ForegroundColor Cyan
-    $code = 1
-    for ($try = 1; $try -le 3 -and $code; $try++) {   # GitHub drops slow uploads with HTTP 408: retry the same file (--clobber replaces a half-uploaded one)
-      if ($try -gt 1) { Write-Host "  retry $try of 3 for $(Split-Path $f -Leaf) ..." -ForegroundColor Yellow; Start-Sleep -Seconds 5 }
-      $code = Send-GhAsset $f $repo
-    }
-    if ($code) { Write-Host "  upload of $(Split-Path $f -Leaf) FAILED (exit $code). The release and its old files were left untouched. Run again to retry." -ForegroundColor Red; $upOk = $false; break }
-  }
-  if (-not $upOk) { return }
-  if ((Invoke-Gh release view ota --repo $repo --json assets --jq '.assets[].name') -eq 0) {
-    $stale = @($script:ghOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and ($keep -notcontains $_) -and ($_ -match $pruneRx) })
-    foreach ($s in $stale) { if ((Invoke-Gh release delete-asset ota $s --repo $repo --yes) -ne 0) { Write-Host "Could not remove old asset ${s}: $($script:ghOut)" -ForegroundColor Yellow } else { Write-Host "  removed old asset $s" -ForegroundColor DarkGray } }
-  }
-  Write-Host "GitHub 'ota' release updated in place to v$ver ($($files.Count) file(s)): https://github.com/$repo/releases/tag/ota" -ForegroundColor Green
-}
