@@ -41,30 +41,6 @@ function Get-PublishedManifest([string]$root) {
   }
 }
 
-# GitHub repository (owner/name) for the source sync, the 'ota' release and the backup downloads.
-# github-repo.txt wins; otherwise the first of papayasds-ai/Nexa-Remote-Desktop, papayasds-ai/NexaDesk or <your gh login>/NexaDesk that exists; with -Create a missing
-# <your gh login>/NexaDesk is created (private). Returns '' when GitHub CLI is missing / not logged in.
-function Resolve-GitHubRepo([string]$root, [switch]$Create) {
-  $f = Join-Path $root 'github-repo.txt'
-  if (Test-Path $f) { $s = (Get-Content $f -Raw).Trim(); if ($s -match '^[\w.-]+/[\w.-]+$') { return $s } }
-  if (-not (Get-Command gh.exe -ErrorAction SilentlyContinue)) { return '' }
-  $ErrorActionPreference = 'Continue'
-  $login = ([string](& gh.exe api user --jq .login 2>$null)).Trim()
-  $ErrorActionPreference = 'Stop'
-  if (-not $login) { return '' }
-  foreach ($c in @('papayasds-ai/Nexa-Remote-Desktop', 'papayasds-ai/NexaDesk', "$login/NexaDesk") | Select-Object -Unique) {
-    $ErrorActionPreference = 'Continue'; & gh.exe repo view $c *> $null; $ok = ($LASTEXITCODE -eq 0); $ErrorActionPreference = 'Stop'
-    if ($ok) { Set-Content $f $c -Encoding ASCII; return $c }
-  }
-  if (-not $Create) { return '' }
-  $slug = "$login/NexaDesk"
-  $ErrorActionPreference = 'Continue'; $out = & gh.exe repo create $slug --private --description 'NexaDesk' 2>&1; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'
-  if ($code) { throw "Could not create the GitHub repository ${slug}: $out" }
-  Write-Host "Created the private GitHub repository $slug" -ForegroundColor Green
-  Set-Content $f $slug -Encoding ASCII
-  return $slug
-}
-
 # Tools installed while a window (or Explorer) was already open are missing from its PATH. Reload PATH from Windows and add the usual
 # install folders, so Git, GitHub CLI, Node and the JDK are found without reopening anything. Runs whenever a script loads this file.
 function Sync-Path {
@@ -82,3 +58,38 @@ function Sync-Path {
   } catch { }   # never let this convenience break a script
 }
 Sync-Path
+
+# ---- GitHub repository: github-repo.txt (owner/name) if present, otherwise the current one ----
+function Get-RepoName([string]$root) {
+  $f = Join-Path $root 'github-repo.txt'
+  if (Test-Path $f) { $n = ((Get-Content $f -Raw) -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1); if ($n -match '^[\w.-]+/[\w.-]+$') { return $n.Trim() } }
+  return 'papayasds-ai/Nexa-Remote-Desktop'
+}
+# ---- where devices download the installers from ----
+#   release-host.txt present -> that public address (R2 bucket), files are uploaded there
+#   otherwise                -> the PUBLIC repository's 'ota' release (nothing to set up, publish-ota uploads them there)
+function Get-ReleaseHost([string]$root) {
+  $f = Join-Path $root 'release-host.txt'
+  if (Test-Path $f) { $u = (Get-Content $f -Raw).Trim().TrimEnd('/'); if ($u) { return @{ Url = $u; R2 = $true } } }
+  return @{ Url = "https://github.com/$(Get-RepoName $root)/releases/download/ota"; R2 = $false }
+}
+# ---- Android signing key: lives in your user profile (like the update keys), so a new zip or project folder never loses it ----
+# An APK signed with a different key cannot be installed over the old one, so a NEW key is refused when an APK was already published.
+function Resolve-Keystore([string]$root) {
+  $dir = Join-Path $env:USERPROFILE '.nexadesk'; New-Item -ItemType Directory -Force $dir | Out-Null
+  $ks = Join-Path $dir 'nexadesk.jks'; $pw = Join-Path $dir 'keystore-password.txt'
+  $oldKs = Join-Path $root 'signing\nexadesk.jks'; $oldPw = Join-Path $root 'signing\keystore-password.txt'
+  if (-not (Test-Path $ks) -and (Test-Path $oldKs) -and (Test-Path $oldPw)) {
+    Copy-Item $oldKs $ks; Copy-Item $oldPw $pw
+    Write-Host "Your Android signing key was moved to $dir - every future project folder finds it there." -ForegroundColor Green
+  }
+  if (-not (Test-Path $ks) -and $env:NEXA_NEW_KEYS -ne '1') {
+    $published = $false
+    try {
+      $r = Invoke-RestMethod "https://api.github.com/repos/$(Get-RepoName $root)/releases/tags/ota" -Headers @{ 'User-Agent' = 'NexaDesk' } -TimeoutSec 15
+      $published = @($r.assets | Where-Object { $_.name -like '*.apk' }).Count -gt 0
+    } catch {}
+    if ($published) { throw "STOP: an APK was already published, but there is no Android signing key on this PC. A new key would make every installed app refuse the update.`nPut nexadesk.jks and keystore-password.txt from your old project's 'signing' folder into $dir and run again.`n(Only to start over with a new key and reinstall the app everywhere: set NEXA_NEW_KEYS=1 first.)" }
+  }
+  return @{ Dir = $dir; Ks = $ks; Pw = $pw }
+}

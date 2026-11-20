@@ -7,7 +7,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis portable --x64 --publish never"
+    "dist": "electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
     "electron": "^45.2.3",
@@ -17,6 +17,10 @@
     "appId": "com.nexadesk.desktop",
     "productName": "NexaDesk",
     "asar": true,
+    "compression": "store",
+    "electronLanguages": [
+      "en-US"
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -39,14 +43,14 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ],
       "requestedExecutionLevel": "asInvoker",
       "icon": "icon.ico"
     },
     "nsis": {
       "oneClick": false,
+      "runAfterFinish": true,
       "allowToChangeInstallationDirectory": true,
       "artifactName": "NexaDesk-Setup-${version}.exe"
     },
@@ -58,10 +62,7 @@
         "provider": "generic",
         "url": "https://updates.invalid/nexadesk"
       }
-    ],
-    "portable": {
-      "artifactName": "NexaDesk-Portable-${version}.exe"
-    }
+    ]
   },
   "repository": {
     "type": "git",

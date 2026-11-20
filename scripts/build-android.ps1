@@ -143,8 +143,7 @@ try {
   if (-not $unsigned) { throw 'Release APK not found' }
 
   # ---- signing (keystore is generated once; BACK IT UP - you need it for every future APK update) ----
-  $signDir = Join-Path $root 'signing'; New-Item -ItemType Directory -Force $signDir | Out-Null
-  $ks = Join-Path $signDir 'nexadesk.jks'; $pwFile = Join-Path $signDir 'keystore-password.txt'
+  $kr = Resolve-Keystore $root; $ks = $kr.Ks; $pwFile = $kr.Pw
   if (-not (Test-Path $ks)) {
     $bytes = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $kpw = [Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', 'x'

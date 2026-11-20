@@ -1,5 +1,5 @@
 # One-click: make sure the server exists, bump version, build EXE + APK, publish OTA to GitHub, ping all devices.
-param([switch]$AllowInsecure)
+param([switch]$AllowInsecure, [string]$Version = '', [string]$Notes = '')   # -Version: MANUAL number (otherwise AUTO)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\common.ps1"   # also refreshes PATH, so freshly installed tools are found
@@ -17,11 +17,12 @@ if (-not (Get-Command java -ErrorAction SilentlyContinue)) { Write-Host "Note: J
 $urlFile = Join-Path $root 'server-url.txt'
 if (-not (Test-Path $urlFile)) { & "$PSScriptRoot\deploy-cloudflare.ps1" }
 if (-not (Test-Path $urlFile)) { throw 'Server setup did not finish. Read the messages above.' }
-& "$PSScriptRoot\bump-version.ps1"
+if ($Version) { & "$PSScriptRoot\bump-version.ps1" -Set $Version } else { & "$PSScriptRoot\bump-version.ps1" }
 $u = (Get-Content $urlFile -Raw).Trim()
 & "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump
 try {
   if ($AllowInsecure) { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump -AllowInsecure } else { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump }
 } catch { Write-Host "`nAndroid build skipped: $($_.Exception.Message)" -ForegroundColor Yellow }
-& "$PSScriptRoot\publish-ota.ps1" -NoBump
+$pubArgs = @{ NoBump = $true }; if ($Notes) { $pubArgs.Notes = $Notes }
+& "$PSScriptRoot\publish-ota.ps1" @pubArgs
 Write-Host "`nAll done. Installers are in output\" -ForegroundColor Green

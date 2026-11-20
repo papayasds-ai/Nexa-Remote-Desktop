@@ -2,6 +2,7 @@
 param([switch]$NoBump, [string]$ServerUrl = "")
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+$ownLog = $false; try { New-Item -ItemType Directory -Force (Join-Path $root 'logs') | Out-Null; Start-Transcript -Path (Join-Path $root 'logs\build-windows.log') -Force | Out-Null; $ownLog = $true } catch { }   # full build output is saved to logs\build-windows.log
 . "$PSScriptRoot\common.ps1"
 Initialize-UpdateKeys $root | Out-Null
 foreach ($c in 'node', 'npm') { if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { throw "$c not found. Install Node.js 18+ LTS from https://nodejs.org" } }
@@ -20,8 +21,7 @@ Copy-Item (Join-Path $root 'app\www') (Join-Path $desk 'www') -Recurse
 $origin = ($ServerUrl -replace '^wss://', 'https://' -replace '^ws://', 'http://')
 $idx = Join-Path $desk 'www\index.html'; [IO.File]::WriteAllText($idx, [IO.File]::ReadAllText($idx).Replace('__OTA_ORIGIN__', $origin), (New-Object Text.UTF8Encoding $false))
 $prefix = if ($origin -match '^https://') { "$origin/" } else { '' }
-$relFile = Join-Path $root 'release-host.txt'
-$relPrefix = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim().TrimEnd('/') + '/' } else { $g = Resolve-GitHubRepo $root -Create; if ($g) { "https://github.com/$g/releases/download/ota/" } else { '' } }
+$relPrefix = (Get-ReleaseHost $root).Url.TrimEnd('/') + '/'
 [IO.File]::WriteAllText((Join-Path $desk 'build-config.json'), (@{ otaPrefix = $prefix; releasePrefix = $relPrefix } | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
 
 Push-Location $desk
@@ -67,4 +67,4 @@ try {
     }
   } catch { Write-Host "  Could not create the portable ZIP: $($_.Exception.Message)" -ForegroundColor Yellow }
   Write-Host "`nDone (v$ver). Windows builds are in: $out" -ForegroundColor Green
-} finally { Pop-Location }
+} finally { Pop-Location; if ($ownLog) { try { Stop-Transcript | Out-Null } catch { } } }

@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, session, desktopCapturer, shell, Menu, ipcMain, protocol, net, nativeImage, safeStorage, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, shell, Menu, ipcMain, protocol, net, nativeImage, safeStorage, powerSaveBlocker, Tray } = require('electron');
 const path = require('path'), fs = require('fs'), crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
 const { pathToFileURL } = require('url');
@@ -10,46 +10,38 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: t
 const slog = m => { try { const f = path.join(app.getPath('userData'), 'startup.log'); try { if (fs.statSync(f).size > 200000) fs.unlinkSync(f); } catch (_) {} fs.appendFileSync(f, new Date().toISOString() + ' ' + m + '\n'); } catch (_) {} };
 // "installed" = set up by the Setup (an uninstaller sits next to the exe). Portable builds (EXE or ZIP) never get installer updates.
 const isInstalled = () => { if (process.env.PORTABLE_EXECUTABLE_FILE) return false; try { return fs.readdirSync(path.dirname(process.execPath)).some(n => /^Uninstall .*\.exe$/i.test(n)); } catch (_) { return false; } };
-slog('start v' + app.getVersion() + (isInstalled() ? '' : ' (portable/unpacked)') + ' args=' + process.argv.slice(1).join(' '));
-if (!app.requestSingleInstanceLock()) { slog('another NexaDesk is already running (it holds the lock): this one quits'); app.quit(); }
+const T0 = (() => { try { return process.getCreationTime() || 0; } catch (_) { return 0; } })();   // when Windows created this process
+const sinceT0 = () => (T0 ? ' +' + (Date.now() - T0) + 'ms since process creation' : '');
+slog('start v' + app.getVersion() + sinceT0() + (isInstalled() ? '' : (process.env.PORTABLE_EXECUTABLE_FILE ? ' (portable EXE)' : ' (unpacked folder)')) + ' args=' + process.argv.slice(1).join(' '));
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) { slog('another NexaDesk is already running (it holds the lock): this one quits'); app.exit(0); }
+// keep the window at full speed when it is minimized/covered (a host must stay responsive), and skip Windows' occlusion tracking
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,MediaRouter,OptimizationHints,Translate,AutofillServerCommunication');
+app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('disable-component-update');
+app.commandLine.appendSwitch('disable-default-apps');
+app.commandLine.appendSwitch('no-first-run');
 
 let win = null, helper = null, fellBack = false;
 const RELEASE_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).releasePrefix; return /^https:\/\/[a-z0-9.-]+\/$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
-// Backup download locations (GitHub copies of the same files). They are only used when they match these exact shapes, and every
-// download must still match the sha256 from the signed update.json.
-const MIRROR_WEB_RE = /^https:\/\/raw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+\/HEAD\/ota\/www-\d+\.\d+\.\d+\.zip$/;
-const MIRROR_APP_RE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/ota\/NexaDesk-Setup-\d+\.\d+\.\d+\.exe$/;
-// Download with live progress (sent to the window), a stall timeout, and a list of URLs tried in order. Returns a Buffer whose sha256 matches, or null.
-async function downloadVerified(urls, sha256, sender, label, stallMs = 25000) {
-  const send = p => { try { if (sender && !sender.isDestroyed()) sender.send('nx-dl-progress', { label, ...p }); } catch (_) {} };
-  for (const url of urls) {
-    const host = (() => { try { return new URL(url).hostname; } catch (_) { return ''; } })();
-    const ac = new AbortController(); let stall = null;
-    const arm = () => { clearTimeout(stall); stall = setTimeout(() => ac.abort(), stallMs); };
-    try {
-      arm();
-      const res = await net.fetch(url, { signal: ac.signal, cache: 'no-store' });
-      if (!res.ok) { slog(label + ': ' + host + ' answered ' + res.status); clearTimeout(stall); continue; }
-      const total = +res.headers.get('content-length') || 0, chunks = [], t0 = Date.now(); let got = 0, last = 0;
-      const reader = res.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read(); if (done) break;
-        arm(); chunks.push(Buffer.from(value)); got += value.length;
-        const now = Date.now();
-        if (now - last > 250) { last = now; send({ host, got, total, speed: got / Math.max(0.001, (now - t0) / 1000) }); }
-      }
-      clearTimeout(stall);
-      const buf = Buffer.concat(chunks);
-      if (crypto.createHash('sha256').update(buf).digest('hex') === String(sha256).toLowerCase()) { send({ host, got, total: got, speed: 0, done: true }); return buf; }
-      slog(label + ': checksum mismatch from ' + host);
-    } catch (e) { slog(label + ': ' + host + ' failed (' + (e && e.message || e) + ')'); }
-    clearTimeout(stall);
-  }
-  return null;
-}
 const OTA_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).otaPrefix; return /^https:\/\/[a-z0-9.-]+\/$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 const CMD = /^(M \d{1,5} \d{1,5}|[DU] [lrm]|W -?\d{1,4}|K \d{1,3} [01] [01]|T \d{1,5}|R -?\d{1,4} -?\d{1,4})$/;
 
+// streaming download with progress events to the UI (bytes received / total / phase)
+function sendProg(o) { try { if (win && !win.isDestroyed()) win.webContents.send('nx-progress', o); } catch (_) {} }
+async function download(url, kind, opts) {
+  const res = await net.fetch(url, opts || {}); if (!res.ok) throw new Error('HTTP ' + res.status);
+  const total = Number(res.headers.get('content-length')) || 0, chunks = []; let got = 0, last = 0;
+  const rd = res.body.getReader();
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break;
+    chunks.push(value); got += value.length;
+    const now = Date.now(); if (now - last > 120) { last = now; sendProg({ kind, phase: 'download', received: got, total }); }
+  }
+  sendProg({ kind, phase: 'download', received: got, total: total || got });
+  return Buffer.concat(chunks);
+}
 // ---------- OTA bundle management ----------
 const otaDir = () => path.join(app.getPath('userData'), 'ota');
 const statePath = () => path.join(app.getPath('userData'), 'ota-state.json');
@@ -68,41 +60,64 @@ ipcMain.handle('nx-ota-install', async (e, o) => {
   try {
     if (!win || e.sender !== win.webContents || process.platform !== 'win32') return { ok: false };
     const { url, version, sha256 } = o || {};
-    const list = [url, ...(Array.isArray(o.urls) ? o.urls : [])].filter((u, i, a) => typeof u === 'string' && a.indexOf(u) === i).slice(0, 3);
-    const okUrl = u => (OTA_PREFIX && u.startsWith(OTA_PREFIX) && /^www-\d+\.\d+\.\d+\.zip$/.test(u.slice(OTA_PREFIX.length))) || MIRROR_WEB_RE.test(u);
-    if (!list.length || !list.every(okUrl)) return { ok: false };
+    if (!OTA_PREFIX || typeof url !== 'string' || !url.startsWith(OTA_PREFIX) || !/^www-\d+\.\d+\.\d+\.zip$/.test(url.slice(OTA_PREFIX.length))) return { ok: false };
     if (!/^\d+\.\d+\.\d+$/.test(version) || !/^[0-9a-f]{64}$/i.test(sha256 || '')) return { ok: false };
-    if (!list.every(u => u.split('/').pop() === `www-${version}.zip`)) return { ok: false };
-    const buf = await downloadVerified(list, sha256.toLowerCase(), e.sender, 'Update v' + version);
-    if (!buf) return { ok: false };
+    const buf = await download(url, 'ota', { cache: 'no-store' });
+    sendProg({ kind: 'ota', phase: 'verify' });
+    if (crypto.createHash('sha256').update(buf).digest('hex') !== sha256.toLowerCase()) { sendProg({ kind: 'ota', phase: 'error' }); return { ok: false }; }
+    sendProg({ kind: 'ota', phase: 'install' });
     const base = otaDir(); fs.mkdirSync(base, { recursive: true });
     const zip = path.join(base, `www-${version}.zip`), dir = path.join(base, `www-${version}`);
     fs.rmSync(dir, { recursive: true, force: true }); fs.writeFileSync(zip, buf);
-    await new Promise((ok, bad) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Expand-Archive -LiteralPath $env:NX_ZIP -DestinationPath $env:NX_DIR -Force'],
-      { windowsHide: true, env: { ...process.env, NX_ZIP: zip, NX_DIR: dir } }, err => (err ? bad(err) : ok())));
+    fs.mkdirSync(dir, { recursive: true });
+    await new Promise((ok, bad) => execFile('tar.exe', ['-xf', zip, '-C', dir], { windowsHide: true }, err => (err ? bad(err) : ok())))
+      .catch(() => new Promise((ok, bad) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Expand-Archive -LiteralPath $env:NX_ZIP -DestinationPath $env:NX_DIR -Force'],
+        { windowsHide: true, env: { ...process.env, NX_ZIP: zip, NX_DIR: dir } }, err => (err ? bad(err) : ok()))));
     if (!fs.existsSync(path.join(dir, 'index.html')) || verOf(dir) !== version) { fs.rmSync(dir, { recursive: true, force: true }); return { ok: false }; }
-    fs.writeFileSync(statePath(), JSON.stringify({ version, dir }));
+    fs.writeFileSync(statePath(), JSON.stringify({ version, dir })); sendProg({ kind: 'ota', phase: 'done' });
     for (const n of fs.readdirSync(base)) if (n !== `www-${version}`) fs.rmSync(path.join(base, n), { recursive: true, force: true });   // erase old packages
     return { ok: true };
-  } catch (_) { return { ok: false }; }
+  } catch (_) { sendProg({ kind: 'ota', phase: 'error' }); return { ok: false }; }
 });
-// app update: download the installer, check it against the checksum in update.json, run it silently
-ipcMain.handle('nx-native-install', async (e, o) => {
-  if (!fromOurWindow(e) || !o || typeof o.url !== 'string' || !/^[a-f0-9]{64}$/.test(o.sha256 || '') || !/^\d+\.\d+\.\d+$/.test(o.version || '')) return { ok: false, why: 'bad request' };
+// app update: the installer is downloaded + checked in the background as soon as it is announced (nx-native-stage),
+// so when the update is applied it only has to start it (no waiting for a 100 MB download at the last second)
+let nativeStaged = null, stagingP = null;
+function nativeOk(e, o) {
+  if (!fromOurWindow(e) || !o || typeof o.url !== 'string' || !/^[a-f0-9]{64}$/.test(o.sha256 || '') || !/^\d+\.\d+\.\d+$/.test(o.version || '')) return 'bad request';
   const file = o.url.split('/').pop();
-  const list = [o.url, ...(Array.isArray(o.urls) ? o.urls : [])].filter((u, i, a) => typeof u === 'string' && a.indexOf(u) === i).slice(0, 3);
-  const okUrl = u => u.split('/').pop() === 'NexaDesk-Setup-' + o.version + '.exe' && ((RELEASE_PREFIX && u.startsWith(RELEASE_PREFIX)) || MIRROR_APP_RE.test(u));
-  if (!list.every(okUrl) || !RELEASE_PREFIX || !o.url.startsWith(RELEASE_PREFIX)) return { ok: false, why: 'untrusted source' };
+  if (!RELEASE_PREFIX || !o.url.startsWith(RELEASE_PREFIX) || file !== 'NexaDesk-Setup-' + o.version + '.exe') return 'untrusted source';
+  return '';
+}
+function stageNative(o) {
+  const target = path.join(app.getPath('temp'), o.url.split('/').pop());
+  if (nativeStaged && nativeStaged.sha === o.sha256 && fs.existsSync(target)) return Promise.resolve(target);
+  if (stagingP && stagingP.sha === o.sha256) return stagingP.p;
+  const p = (async () => {
+    const buf = await download(o.url, 'native');
+    sendProg({ kind: 'native', phase: 'verify' });
+    if (crypto.createHash('sha256').update(buf).digest('hex') !== o.sha256) { sendProg({ kind: 'native', phase: 'error' }); throw new Error('checksum mismatch'); }
+    fs.writeFileSync(target, buf); nativeStaged = { sha: o.sha256 };
+    sendProg({ kind: 'native', phase: 'done' });
+    return target;
+  })();
+  stagingP = { sha: o.sha256, p }; p.then(() => { stagingP = null; }, () => { stagingP = null; });
+  return p;
+}
+ipcMain.handle('nx-native-stage', async (e, o) => {
+  const bad = nativeOk(e, o); if (bad) return { ok: false, why: bad };
+  try { await stageNative(o); return { ok: true }; } catch (er) { sendProg({ kind: 'native', phase: 'error' }); return { ok: false, why: er.message || 'failed' }; }
+});
+ipcMain.handle('nx-native-install', async (e, o) => {
+  const bad = nativeOk(e, o); if (bad) return { ok: false, why: bad };
   try {
-    const buf = await downloadVerified(list, o.sha256, e.sender, 'App update v' + o.version);
-    if (!buf) return { ok: false, why: 'download failed or checksum mismatch' };
-    const target = path.join(app.getPath('temp'), file);
-    fs.writeFileSync(target, buf);
-    // run after this app has exited, so the installer can replace the files
-    const child = require('child_process').spawn('cmd.exe', ['/c', 'ping -n 4 127.0.0.1 >nul & "' + target + '" --updated /S --force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
+    let target; try { target = await stageNative(o); } catch (er) { sendProg({ kind: 'native', phase: 'error' }); return { ok: false, why: 'download failed (' + er.message + ')' }; }
+    sendProg({ kind: 'native', phase: 'install' });
+    await new Promise(r => setTimeout(r, 1500));          // let the user read "the installer opens now"
+    // VISIBLE installer (no /S): starts after this app has exited; its last page asks the user to run NexaDesk
+    const child = spawn('cmd.exe', ['/c', 'ping -n 2 127.0.0.1 >nul & start "" "' + target + '"'], { detached: true, stdio: 'ignore', windowsHide: true });
     child.unref();
-    slog('app update v' + o.version + ': installer started, quitting (the installer restarts the app)');
-    setTimeout(() => app.quit(), 800);
+    slog('app update v' + o.version + ': installer opened, quitting');
+    setTimeout(() => app.quit(), 300);
     return { ok: true };
   } catch (_) { return { ok: false, why: 'failed' }; }
 });
@@ -119,6 +134,51 @@ ipcMain.handle('nx-secret-set', (e, v) => {
   if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable() || typeof v !== 'string' || v.length > 256) return false;
   try { fs.writeFileSync(secretFile(), safeStorage.encryptString(v)); return true; } catch (_) { return false; }
 });
+// system tray (optional, Settings > This PC): closing the window hides it instead of quitting, so this PC stays reachable
+let tray = null, trayOn = false, quitting = false;
+function showWin() { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } }
+// ---------- receive files from a viewer: saved in Downloads\NexaDesk, never overwrites, risky file types refused ----------
+const rxFiles = new Map(), MAX_FILE = 500 * 1024 * 1024;
+const RISKY = /\.(exe|msi|msix|bat|cmd|com|scr|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|lnk|dll|jar|hta|reg|cpl|msc|pif)$/i;
+function rxClose(id, ok) {
+  const f = rxFiles.get(id); if (!f) return { ok: false };
+  rxFiles.delete(id); try { fs.closeSync(f.fd); } catch (_) {}
+  const good = !!ok && f.got === f.size;
+  if (!good) { try { fs.unlinkSync(f.file); } catch (_) {} }
+  return { ok: good, name: path.basename(f.file) };
+}
+ipcMain.on('nx-file-open', (e, o) => {
+  e.returnValue = { ok: false };
+  try {
+    if (!fromOurWindow(e) || !o || process.platform !== 'win32') return;
+    let name = path.basename(String(o.name || '')).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '').slice(0, 120) || 'file';
+    if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(name)) name = '_' + name;
+    const size = Number(o.size);
+    if (!Number.isFinite(size) || size < 0 || size > MAX_FILE) { e.returnValue = { ok: false, why: 'size' }; return; }
+    if (RISKY.test(name)) { e.returnValue = { ok: false, why: 'blocked' }; return; }
+    const dir = path.join(app.getPath('downloads'), 'NexaDesk'); fs.mkdirSync(dir, { recursive: true });
+    const ext = path.extname(name), base = name.slice(0, name.length - ext.length);
+    let file = path.join(dir, name), n = 1, fd = -1;
+    for (;;) { try { fd = fs.openSync(file, 'wx'); break; } catch (er) { if (er.code !== 'EEXIST' || n > 99) throw er; file = path.join(dir, `${base} (${n++})${ext}`); } }
+    const id = crypto.randomBytes(6).toString('hex'); rxFiles.set(id, { fd, file, size, got: 0 });
+    e.returnValue = { ok: true, id, name: path.basename(file) };
+  } catch (_) { e.returnValue = { ok: false }; }
+});
+ipcMain.on('nx-file-chunk', (e, id, data) => {
+  if (!fromOurWindow(e)) return; const f = rxFiles.get(id); if (!f || !ArrayBuffer.isView(data)) return;
+  if (f.got + data.byteLength > f.size) { rxClose(id, false); return; }
+  try { fs.writeSync(f.fd, Buffer.from(data.buffer, data.byteOffset, data.byteLength)); f.got += data.byteLength; } catch (_) { rxClose(id, false); }
+});
+ipcMain.handle('nx-file-close', (e, id, ok) => (fromOurWindow(e) ? rxClose(String(id), !!ok) : { ok: false }));
+function setTray(on) {
+  trayOn = !!on;
+  if (trayOn && !tray) {
+    let img = nativeImage.createFromPath(iconPath()); if (!img.isEmpty()) img = img.resize({ width: 16, height: 16 });
+    tray = new Tray(img); tray.setToolTip('NexaDesk');
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open NexaDesk', click: showWin }, { type: 'separator' }, { label: 'Quit NexaDesk', click: () => { quitting = true; app.quit(); } }]));
+    tray.on('click', showWin);
+  } else if (!trayOn && tray) { tray.destroy(); tray = null; showWin(); }
+}
 // host comfort (Windows): keep the PC from sleeping while NexaDesk runs, and optionally start with Windows (minimized)
 let awakeId = null;
 ipcMain.handle('nx-power', (e, o) => {
@@ -128,11 +188,12 @@ ipcMain.handle('nx-power', (e, o) => {
       if (o.keepAwake && awakeId === null) awakeId = powerSaveBlocker.start('prevent-app-suspension');
       if (!o.keepAwake && awakeId !== null) { powerSaveBlocker.stop(awakeId); awakeId = null; }
     }
+    if (typeof o.tray === 'boolean') setTray(o.tray);
     if (typeof o.autostart === 'boolean') {
       if (!app.isPackaged) return { ok: false };
       app.setLoginItemSettings({ openAtLogin: o.autostart, args: ['--autostart'] });
     }
-    return { ok: true, keepAwake: awakeId !== null, autostart: app.isPackaged ? !!app.getLoginItemSettings().openAtLogin : false };
+    return { ok: true, keepAwake: awakeId !== null, autostart: app.isPackaged ? !!app.getLoginItemSettings().openAtLogin : false, tray: trayOn };
   } catch (_) { return { ok: false }; }
 });
 ipcMain.on('nx-ota-apply', e => { if (win && e.sender === win.webContents) win.loadURL('app://nexadesk/index.html'); });
@@ -145,11 +206,22 @@ function ensureHelper() {
   helper.on('exit', () => { helper = null; });
   helper.stdin.on('error', () => {});
 }
+// Mouse moves are absolute, so only the newest one matters: the first goes out at once, and a burst (for example after a network hiccup)
+// collapses into one jump at most every 8 ms instead of being replayed slowly. Clicks and keys flush the pending move first (order kept).
+let lastMove = 0, pendMove = null, pendTimer = null;
+function writeMove(c) { lastMove = Date.now(); if (helper) helper.stdin.write(c + '\n'); }
+function flushMove() { if (pendTimer) { clearTimeout(pendTimer); pendTimer = null; } if (pendMove) { writeMove(pendMove); pendMove = null; } }
 ipcMain.on('nx-input', (e, cmd) => {
   if (!win || e.sender !== win.webContents) return;
   if (typeof cmd !== 'string' || !CMD.test(cmd)) return;        // strict whitelist: nothing else reaches PowerShell
-  ensureHelper(); if (helper) helper.stdin.write(cmd + '\n');
+  ensureHelper(); if (!helper) return;
+  if (cmd.charCodeAt(0) !== 77) { flushMove(); helper.stdin.write(cmd + '\n'); return; }   // not a move
+  const dt = Date.now() - lastMove;
+  if (dt >= 8 && !pendTimer) return writeMove(cmd);
+  pendMove = cmd;
+  if (!pendTimer) pendTimer = setTimeout(() => { pendTimer = null; if (pendMove) { writeMove(pendMove); pendMove = null; } }, Math.max(1, 8 - dt));
 });
+ipcMain.on('nx-warm', e => { if (win && e.sender === win.webContents) ensureHelper(); });   // start the input helper before the first mouse move
 ipcMain.on('nx-focus', e => { if (win && e.sender === win.webContents) { win.show(); win.focus(); win.flashFrame(true); } });
 
 function resPath(f) { return app.isPackaged ? path.join(process.resourcesPath, f) : path.join(__dirname, f); }
@@ -160,18 +232,17 @@ function applyWindowIcon() {
   let p = iconPath(); let img = nativeImage.createFromPath(p);
   if (img.isEmpty()) { p = resPath('icon.ico'); img = nativeImage.createFromPath(p); }
   if (win && !img.isEmpty()) win.setIcon(img);
-  try { fs.appendFileSync(path.join(app.getPath('userData'), 'icon-debug.log'), `${new Date().toISOString()} icon=${p} exists=${fs.existsSync(p)} loaded=${!img.isEmpty()} size=${JSON.stringify(img.getSize())}\n`); } catch (_) {}
 }
 function createWindow() {
   win = new BrowserWindow({
     width: 1100, height: 720, minWidth: 760, minHeight: 520, backgroundColor: '#0b0f17', title: 'NexaDesk', autoHideMenuBar: true, icon: iconPath(),
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false }
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false, backgroundThrottling: false }
   });
   Menu.setApplicationMenu(null);
   if (process.argv.includes('--autostart')) win.minimize();   // started by "Start with Windows": stay out of the way
   slog('window created');
   win.once('ready-to-show', () => {
-    slog('ready-to-show'); applyWindowIcon(); setTimeout(applyWindowIcon, 1500);
+    slog('ready-to-show' + sinceT0()); applyWindowIcon(); setTimeout(applyWindowIcon, 1500);
     try {   // make sure the window is really on screen and in front (Windows can leave a new window behind others or minimized)
       if (!process.argv.includes('--autostart')) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); win.setAlwaysOnTop(true); setTimeout(() => { if (win && !win.isDestroyed()) win.setAlwaysOnTop(false); }, 800); }
     } catch (e) { slog('show error: ' + e.message); }
@@ -180,7 +251,8 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => slog('page loaded'));
   win.webContents.on('did-fail-load', (_e, code, desc, url) => slog('page FAILED to load: ' + code + ' ' + desc + ' ' + url));
   win.webContents.on('render-process-gone', (_e, d) => slog('renderer gone: ' + (d && d.reason)));
-  win.on('closed', () => slog('window closed'));
+  win.on('close', e => { if (trayOn && !quitting) { e.preventDefault(); win.hide(); } });   // tray mode: closing the window only hides it
+  win.on('session-end', () => { quitting = true; });
   win.loadURL('app://nexadesk/index.html');
   // safety net: if a downloaded bundle fails to load, drop it and fall back to the bundle shipped in the installer
   win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
@@ -188,18 +260,20 @@ function createWindow() {
   });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', e => e.preventDefault());
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => { slog('window closed'); win = null; });
 }
 
 if (process.platform === 'win32') app.setAppUserModelId('com.nexadesk.desktop');   // taskbar groups and icons by this ID
 app.whenReady().then(() => {
+  if (!gotLock) return;
   protocol.handle('app', async req => {
     let p = decodeURIComponent(new URL(req.url).pathname); if (p === '/' || p === '') p = '/index.html';
     const root = currentRoot(), file = path.normalize(path.join(root, p));
     if (!file.startsWith(root + path.sep)) return new Response('forbidden', { status: 403 });
-    const r = await net.fetch(pathToFileURL(file).toString());
-    const h = new Headers(r.headers); h.set('Cache-Control', 'no-store');   // never serve a stale UI file after an update
-    return new Response(r.body, { status: r.status, headers: h });
+    try {
+      const buf = await fs.promises.readFile(file);
+      return new Response(buf, { status: 200, headers: { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-store' } });
+    } catch (_) { return new Response('not found', { status: 404 }); }
   });
   const ses = session.defaultSession;
   ses.setDisplayMediaRequestHandler(async (req, cb) => {
@@ -207,8 +281,7 @@ app.whenReady().then(() => {
   });
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(['media', 'display-capture', 'clipboard-sanitized-write', 'clipboard-read'].includes(perm)));
   createWindow();
-  applyWindowIcon();
 });
-app.on('second-instance', () => { if (win) { win.show(); win.focus(); } });
-app.on('before-quit', () => slog('quit'));
+app.on('second-instance', showWin);
+app.on('before-quit', () => { quitting = true; for (const id of [...rxFiles.keys()]) rxClose(id, false); slog('quit'); });
 app.on('window-all-closed', () => { if (helper) helper.kill(); app.quit(); });

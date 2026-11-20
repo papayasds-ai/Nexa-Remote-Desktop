@@ -3,9 +3,8 @@
 #   -Mode manual  you type the version number (must be higher than the live one) and pick the options
 #   -Scope quick  UI/logic only (app\www): no rebuild, devices update in seconds
 #   -Scope full   also rebuilds the EXE + APK (needed after changes in desktop\ or the Android plugins)
-#   -Optional     NORMAL release: each device follows its own setting (automatic when idle, or waits for its Install button).
-#                 Without it the release is FORCED: every device installs it after a short warning, whatever its setting.
-param([ValidateSet('auto', 'manual')][string]$Mode = 'auto', [ValidateSet('quick', 'full', '')][string]$Scope = '', [string]$Version = '', [switch]$Optional, [string]$Notes = '')
+#   Every release is FORCED: each device shows the "Update required" pop-up, downloads with a progress bar and installs (Windows: the installer opens and asks to run NexaDesk).
+param([ValidateSet('auto', 'manual')][string]$Mode = 'auto', [ValidateSet('quick', 'full', '')][string]$Scope = '', [string]$Version = '', [string]$Notes = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\common.ps1"
@@ -19,14 +18,11 @@ try {   # a missing relay is the usual reason a phone on mobile data cannot conn
 if ($Mode -eq 'manual') {
   if (-not $Version) { $Version = (Read-Host 'Version number to publish (example 1.0.35, must be higher than the live one)').Trim() }
   if (-not $Scope) { $Scope = if ((Read-Host 'Update type: [Q] quick (UI/logic only)   [F] full (rebuild EXE + APK)   [Q/F]') -match '^[Ff]') { 'full' } else { 'quick' } }
-  if (-not $PSBoundParameters.ContainsKey('Optional')) { if ((Read-Host 'Forced? Every device installs it after a short warning [Y/n]') -match '^[Nn]') { $Optional = [switch]$true } }
   if (-not $Notes) { $Notes = Read-Host 'Short release notes the users will see (optional, Enter to skip)' }
 } elseif (-not $Scope) { $Scope = 'quick' }
 $a = @{}
 if ($Version) { $a.Version = $Version }
+if ($Notes -match '^\s*[YyNn]\s*$') { $Notes = '' }   # a stray Y/N is not a release note
 if ($Notes) { $a.Notes = $Notes.Trim() }
-if ($Optional) { $a.NoForce = $true }
-Write-Host ('Publishing: ' + $Scope + ' update, ' + $(if ($Optional) { 'normal (each device decides)' } else { 'FORCED' }) + ', version ' + $(if ($Version) { $Version } else { 'chosen automatically' })) -ForegroundColor Cyan
+Write-Host ('Publishing: ' + $Scope + ' update, ' + 'FORCED' + ', version ' + $(if ($Version) { $Version } else { 'chosen automatically' })) -ForegroundColor Cyan
 if ($Scope -eq 'full') { & "$PSScriptRoot\release-all.ps1" @a } else { & "$PSScriptRoot\publish-ota.ps1" @a }
-if ($LASTEXITCODE) { Write-Host "`nUpdate did not complete (exit $LASTEXITCODE). Read the red lines above." -ForegroundColor Red; exit $LASTEXITCODE }
-exit 0
