@@ -1,9 +1,9 @@
 {
-    "version":  "1.0.93",
-    "bundle":  "www-1.0.93.zip",
-    "sha256":  "11010a20d5441c0f01d5ee10538f20fda06bf09b7cdf8c315c5642ef2442bc7d",
+    "version":  "1.0.94",
+    "bundle":  "www-1.0.94.zip",
+    "sha256":  "8cd6ac7b07d9b570c093bb14506ab9abd1f49d902a08d30aace709801b44f0bb",
     "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
-    "released":  "2026-11-20T23:24:09.5353876Z",
+    "released":  "2026-11-20T23:28:19.0520812Z",
     "trust":  [
                   "d90ea841dfdb9803",
                   "047d1bba55ce3069"
@@ -11,5 +11,11 @@
     "keyId":  "",
     "force":  true,
     "notes":  "",
-    "native":  null
+    "native":  {
+                   "version":  "1.0.94",
+                   "windows":  {
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.94.exe",
+                                   "sha256":  "8fd30692aaf0d87a310b3216feefb62c18db30cbe20bb7ee2461cfe130c85ad6"
+                               }
+               }
 }
