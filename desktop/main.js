@@ -188,6 +188,7 @@ const ADMIN_TASK = 'NexaDesk Autostart';
 const elevatedP = process.platform === 'win32' ? new Promise(ok => execFile('fltmc.exe', [], { windowsHide: true }, err => ok(!err))) : Promise.resolve(false);
 elevatedP.then(v => slog('administrator rights: ' + v));
 const runOk = (file, args, opt) => new Promise(ok => execFile(file, args, { windowsHide: true, ...(opt || {}) }, err => ok(!err)));
+ipcMain.on('nx-log', (e, m) => { if (fromOurWindow(e)) slog('ui: ' + m); });
 ipcMain.handle('nx-admin', async (e, o) => {
   if (!fromOurWindow(e) || process.platform !== 'win32') return { ok: false };
   o = o || {}; const elevated = await elevatedP;
@@ -310,7 +311,7 @@ app.whenReady().then(() => {
   });
   const ses = session.defaultSession;
   ses.setDisplayMediaRequestHandler(async (req, cb) => {
-    try { const s = await desktopCapturer.getSources({ types: ['screen'] }); cb(req.audioRequested ? { video: s[0], audio: 'loopback' } : { video: s[0] }); } catch (_) { cb({}); }   // 'loopback' = the sound this PC plays
+    try { const s = await desktopCapturer.getSources({ types: ['screen'] }); cb(req.audioRequested ? { video: s[0], audio: 'loopback' } : { video: s[0] }); } catch (e) { slog('screen capture failed: ' + (e && e.message || e) + (process.argv.includes('--elevated') ? ' (elevated)' : '')); cb({}); }   // 'loopback' = the sound this PC plays
   });
   ses.setPermissionCheckHandler((wc, perm, origin) => !!origin && origin.startsWith('app://nexadesk') && ['media', 'display-capture', 'clipboard-sanitized-write', 'clipboard-read'].includes(perm));
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(wc.getURL().startsWith('app://nexadesk/') && ['media', 'display-capture', 'clipboard-sanitized-write', 'clipboard-read'].includes(perm)));
