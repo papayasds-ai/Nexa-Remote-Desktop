@@ -1,9 +1,9 @@
 {
-    "version":  "1.0.18",
-    "bundle":  "www-1.0.18.zip",
-    "sha256":  "54712bfa9bff87aed8b4b36b2df71e51c749b79f23b9b14404db4524b76dd4cd",
+    "version":  "1.0.19",
+    "bundle":  "www-1.0.19.zip",
+    "sha256":  "eab27badcabbd701b63b63b7500c7bfcae3cdbb04c141fb34b33cfccd17d0368",
     "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
-    "released":  "2026-11-21T14:31:48.4338242Z",
+    "released":  "2026-11-21T14:34:07.1390873Z",
     "mirrors":  {
                     "web":  "https://raw.githubusercontent.com/papayasds-ai/Nexa-Remote-Desktop/HEAD/ota/",
                     "app":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/"
