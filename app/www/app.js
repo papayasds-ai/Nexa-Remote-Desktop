@@ -130,7 +130,7 @@ async function onAuth(from, mac) {
   if (kind === 'password' && S.get('unattended', false)) perm = { control: S.get('defControl', true), clip: S.get('defClip', true), files: S.get('defFiles', true) };
   else perm = await askConsent(from);
   if (!perm) { log('host', from, 'denied by user'); return send({ t: 'deny', to: from, reason: 'The user declined the request.' }); }
-  try { await startHost(from, secret, perm); } catch (e) { console.error(e); toast('Could not start screen sharing'); send({ t: 'deny', to: from, reason: 'Host could not capture the screen.' }); endHost(false); }
+  try { await startHost(from, secret, perm); } catch (e) { console.error(e); const why = (e && (e.name || e.message)) ? ' (' + (e.name || e.message) + ')' : ''; toast('Could not start screen sharing' + why); log('host', from, 'screen sharing failed' + why); if (window.nexa && window.nexa.log) window.nexa.log('startHost failed: ' + (e && e.stack || e)); send({ t: 'deny', to: from, reason: 'Host could not capture the screen.' }); endHost(false); }
 }
 function askConsent(from) {
   return new Promise(res => {
@@ -142,10 +142,20 @@ function askConsent(from) {
     $('#mdNo').onclick = () => done(null);
   });
 }
+async function grabScreen(wantSound) {            // tries with sound, then picture only, then plain; a few rounds (the capturer can be briefly busy)
+  const tries = [{ video: { frameRate: 30 }, audio: !!wantSound }, { video: { frameRate: 30 }, audio: false }, { video: true, audio: false }];
+  let last;
+  for (let round = 0; round < 3; round++) {
+    for (const c of tries) {
+      try { return await navigator.mediaDevices.getDisplayMedia(c); }
+      catch (e) { last = e; if (window.nexa && window.nexa.log) window.nexa.log('getDisplayMedia failed: ' + (e && e.name) + ' ' + (e && e.message)); }
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  throw last;
+}
 async function startHost(from, secret, perm) {
-  const wantSound = S.get('shareAudio', false); let stream;
-  try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: wantSound }); }
-  catch (e) { if (!wantSound) throw e; stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false }); }   // no sound capture available: share the picture only
+  const stream = await grabScreen(S.get('shareAudio', false));
   const pc = new RTCPeerConnection({ iceServers: iceList() });
   host = { peer: from, pc, stream, perm, secret, q: [], remoteSet: false, t0: Date.now() };
   stream.getTracks().forEach(t => { if (t.kind === 'video') { try { t.contentHint = 'detail'; } catch (_) {} } pc.addTrack(t, stream); });

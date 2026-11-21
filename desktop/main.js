@@ -11,6 +11,11 @@ const slog = m => { try { const f = path.join(app.getPath('userData'), 'startup.
 // "installed" = set up by the Setup (an uninstaller sits next to the exe). Portable builds (EXE or ZIP) never get installer updates.
 const isInstalled = () => { if (process.env.PORTABLE_EXECUTABLE_FILE) return false; try { return fs.readdirSync(path.dirname(process.execPath)).some(n => /^Uninstall .*\.exe$/i.test(n)); } catch (_) { return false; } };
 slog('start v' + app.getVersion() + (isInstalled() ? '' : ' (portable/unpacked)') + ' args=' + process.argv.slice(1).join(' '));
+// When running as administrator, fall back from Windows Graphics Capture to the older screen capturer (more reliable elevated), and record GPU/child crashes
+let elevatedNow = false;
+if (process.platform === 'win32') { try { require('child_process').execFileSync('fltmc.exe', [], { stdio: 'ignore', windowsHide: true, timeout: 3000 }); elevatedNow = true; } catch (_) {} }
+if (elevatedNow) app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcDesktopCapturer');
+app.on('child-process-gone', (_e, d) => slog('child process gone: ' + (d && d.type) + ' ' + (d && d.reason)));
 if (!app.requestSingleInstanceLock()) { slog('another NexaDesk is already running (it holds the lock): this one quits'); app.quit(); }
 
 let win = null, helper = null, fellBack = false, tray = null, keepTray = false, quitting = false;
@@ -112,6 +117,7 @@ ipcMain.handle('nx-native-version', e => (fromOurWindow(e) && isInstalled() ? ap
 const secretFile = () => path.join(app.getPath('userData'), 'secret.bin');
 const vaultFile = () => path.join(app.getPath('userData'), 'vault.bin');
 const fromOurWindow = e => !!win && e.sender === win.webContents;
+ipcMain.on('nx-log', (e, m) => { if (fromOurWindow(e) && typeof m === 'string') slog('page: ' + m.slice(0, 400)); });   // errors of the page end up in startup.log
 // saved-PC passwords (one JSON text, encrypted with DPAPI)
 ipcMain.handle('nx-vault-get', e => {
   if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable()) return '';
@@ -287,7 +293,15 @@ app.whenReady().then(() => {
   });
   const ses = session.defaultSession;
   ses.setDisplayMediaRequestHandler(async (req, cb) => {
-    try { const s = await desktopCapturer.getSources({ types: ['screen'] }); cb(req.audioRequested ? { video: s[0], audio: 'loopback' } : { video: s[0] }); } catch (_) { cb({}); }   // 'loopback' = the sound this PC plays
+    let src = null;
+    for (let i = 0; i < 3 && !src; i++) {      // thumbnails are not needed (and are a common failure point), so they are switched off; retried a few times
+      try { const s = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false }); src = s[0] || null; if (!src) slog('screen sources: none (try ' + (i + 1) + ')'); }
+      catch (e) { slog('screen sources failed (try ' + (i + 1) + '): ' + (e && e.message || e)); }
+      if (!src) await new Promise(r => setTimeout(r, 400));
+    }
+    slog('screen capture source: ' + (src ? src.id : 'NONE') + ' administrator=' + elevatedNow);
+    if (!src) return cb({});
+    cb(req.audioRequested ? { video: src, audio: 'loopback' } : { video: src });   // 'loopback' = the sound this PC plays
   });
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(wc.getURL().startsWith('app://nexadesk/') && ['media', 'display-capture', 'clipboard-sanitized-write', 'clipboard-read'].includes(perm)));
   createWindow();

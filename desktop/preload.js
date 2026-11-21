@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('nexa', {
   vault: { get: () => ipcRenderer.invoke('nx-vault-get'), set: v => ipcRenderer.invoke('nx-vault-set', v) },
   // run as administrator (so mouse/keyboard also reach Task Manager, installers, other admin windows)
   admin: o => ipcRenderer.invoke('nx-admin', o || {}),
+  log: m => ipcRenderer.send('nx-log', String(m)),
   // file transfer to this PC (saved in Downloads\NexaDesk Received)
   fileOpen: o => ipcRenderer.invoke('nx-file-open', o),
   fileWrite: (id, bytes) => ipcRenderer.invoke('nx-file-write', id, bytes),
