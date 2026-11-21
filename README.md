@@ -5,7 +5,7 @@ Components
 - `app/www/`     Shared UI + WebRTC/crypto logic (used by both Windows and Android).
 - `desktop/`     Electron wrapper -> Windows EXE (installer + portable). Host AND viewer.
 - `android-app/` Capacitor wrapper -> signed APK. Viewer/controller (touch, on-screen keyboard).
-- `scripts/`     PowerShell build scripts. **`NexaDesk.bat` is the only launcher**: double-click it for the menu, or run `NexaDesk.bat <command>` (see below).
+- `scripts/`     PowerShell build scripts. **`NexaDesk.bat` is the only launcher**: double-click it for the 3-item menu (full release, quick update, security check), or run `NexaDesk.bat <command>` (see below).
 
 ## Quick start (Windows PC)
 1. Install Node.js 22.12+ LTS (the build tools need it), Git for Windows, and (for the APK) JDK 17 + Android Studio SDK with `ANDROID_HOME` set.
@@ -15,7 +15,7 @@ Components
 4. Later: **2) QUICK UPDATE** for UI/logic changes (no rebuild, all devices update instantly), **1)** when native parts change.
 
 ## Hosting the server on Cloudflare (no VPS needed)
-`NexaDesk.bat server` (menu option 6; also runs automatically on the first release): it logs in, deploys `cloudflare/` as a Worker + Durable Object, creates the secret and prints your `wss://…workers.dev` URL. Do NOT upload `server/server.js` to Workers (it is Node-only). Optional Cloudflare TURN: `npx wrangler secret put TURN_KEY_ID` and `TURN_API_TOKEN`.
+`NexaDesk.bat server` (also runs automatically on the first release): it logs in, deploys `cloudflare/` as a Worker + Durable Object, creates the secret and prints your `wss://…workers.dev` URL. Do NOT upload `server/server.js` to Workers (it is Node-only). Optional Cloudflare TURN: `npx wrangler secret put TURN_KEY_ID` and `TURN_API_TOKEN`.
 
 ## Ways to connect across networks
 | Method | How |
@@ -98,6 +98,7 @@ system privileges. That is a deliberate security decision, not something the app
 | `check` | download what the server publishes and verify it like an app would |
 | `diagnose` | start the EXE and report what happens |
 | `auto-on` / `auto-off` | automatic releases every 10 minutes |
+| `setup` | new PC? read-only check of tools, logins, update key, keystore, server and installer hosting; says exactly what is missing |
 | `migrate [-From folder]` | copy server-url, tokens, keystore (`signing\`) from an older NexaDesk folder into this one |
 
 ## New in this version (1.0.17)

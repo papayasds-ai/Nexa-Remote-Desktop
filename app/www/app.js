@@ -58,7 +58,12 @@ async function loadPermPw() {
     const old = S.get('permpw', '');                                  // migrate an older plain-text copy
     if (old && !permPwCache) { permPwCache = old; await sec.set(old); }
     if (old) localStorage.removeItem('nx_permpw');
-  } else permPwCache = S.get('permpw', '') || '';
+  } else {                                                           // Android / browser: AES-GCM vault (non-extractable key), not plain localStorage
+    const v = await Vault.load(); permPwCache = v._perm || '';
+    const old = S.get('permpw', '');
+    if (old && !permPwCache) { permPwCache = old; v._perm = old; await Vault.save(v); vaultData = { ...vaultData, ...v }; }
+    if (old) localStorage.removeItem('nx_permpw');
+  }
 }
 function newPw() {
   const perm = permPwCache;
@@ -668,7 +673,7 @@ $('#savePerm').onclick = async () => {
   const v = $('#permPw').value; if (v.length < 12) return toast('Use at least 12 characters');
   const sec = window.nexa && window.nexa.secret && window.nexa.secret.available ? window.nexa.secret : null;
   if (sec) { if (!(await sec.set(v))) return toast('Could not store the password securely'); localStorage.removeItem('nx_permpw'); }
-  else S.set('permpw', v);
+  else { vaultData = await Vault.load(); vaultData._perm = v; if (!(await Vault.save(vaultData))) return toast('Could not store the password securely'); localStorage.removeItem('nx_permpw'); }
   permPwCache = v; $('#permPw').value = ''; toast('Saved'); if (S.get('unattended', false)) newPw();
 };
 loadPermPw().then(newPw);
