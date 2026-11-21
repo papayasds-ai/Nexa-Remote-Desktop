@@ -4,7 +4,7 @@
 //   recovery key  ~\.nexadesk\RECOVERY-MOVE-OFFLINE.pem  created once; move it to a password manager / USB stick and delete it from disk.
 //                                                       Only its public half (recovery-public.pem) stays here.
 // Either key is accepted by the apps. If the daily key is ever lost, publish once with the recovery key
-// (START-HERE.bat option 4): a new daily key is created and every app picks up the new trust list by itself.
+// (NexaDesk.bat update -RecoveryKey <file>): a new daily key is created and every app picks up the new trust list by itself.
 //
 //   node sign-manifest.js ensure [liveTrustIds] [recoveryPem]   makes sure keys exist, writes app\www\update-keys.js, prints KEYID= and TRUST=
 //   node sign-manifest.js sign2 <file> [recoveryPem]            writes update.sig2 (signature the new apps verify)
@@ -31,7 +31,7 @@ function ensure(liveCsv, recArg) {
   const makeDaily = () => { fs.writeFileSync(dailyFile, newPair().privateKey, { mode: 0o600 }); console.log('Created your daily update key: ' + dailyFile); };
   const makeRecovery = () => {
     const k = newPair(); fs.writeFileSync(recPrivFile, k.privateKey, { mode: 0o600 }); fs.writeFileSync(recPubFile, k.publicKey);
-    fs.writeFileSync(path.join(home, 'READ-ME.txt'), 'NexaDesk update keys\r\n\r\nupdate-key.pem is the key that signs your releases. Keep it (back it up in a password manager).\r\nRECOVERY-MOVE-OFFLINE.pem is the spare: move it to a password manager or USB stick and delete it from this PC.\r\nIf update-key.pem is ever lost: START-HERE.bat option 4 (path to the recovery file) (no reinstall needed).\r\n');
+    fs.writeFileSync(path.join(home, 'READ-ME.txt'), 'NexaDesk update keys\r\n\r\nupdate-key.pem is the key that signs your releases. Keep it (back it up in a password manager).\r\nRECOVERY-MOVE-OFFLINE.pem is the spare: move it to a password manager or USB stick and delete it from this PC.\r\nIf update-key.pem is ever lost: NexaDesk.bat update -RecoveryKey <path to the recovery file> (no reinstall needed).\r\n');
     console.log('\n*** RECOVERY KEY CREATED: ' + recPrivFile);
     console.log('*** Move this file to a password manager or USB stick NOW and delete it from this PC. Without it a lost daily key means reinstalling the apps.\n');
   };
@@ -44,13 +44,13 @@ function ensure(liveCsv, recArg) {
       fs.writeFileSync(recPubFile, crypto.createPublicKey(fs.readFileSync(recArg)).export({ type: 'spki', format: 'pem' }));
       makeDaily();
     } else if (live.length) {
-      fail('your daily update key (' + dailyFile + ') is missing, but the devices already trust ' + live.join(', ') + '. Restore that file from your backup, or publish once with the recovery key: START-HERE.bat option 4 (path to RECOVERY-MOVE-OFFLINE.pem)');
+      fail('your daily update key (' + dailyFile + ') is missing, but the devices already trust ' + live.join(', ') + '. Restore that file from your backup, or publish once with the recovery key: NexaDesk.bat update -RecoveryKey <path to RECOVERY-MOVE-OFFLINE.pem>');
     } else { makeDaily(); if (!fs.existsSync(recPubFile)) makeRecovery(); }
   }
   if (!fs.existsSync(recPubFile)) makeRecovery();
   const dailyId = idOfPem(dailyFile), recId = idOfPem(recPubFile);
   if (live.length && !live.includes(dailyId) && !(recArg && live.includes(idOfPem(recArg)))) {
-    fail('your daily key is ' + dailyId + ' but the devices trust ' + live.join(', ') + '. Restore the right ~\\.nexadesk\\update-key.pem, or publish once with the recovery key: START-HERE.bat option 4');
+    fail('your daily key is ' + dailyId + ' but the devices trust ' + live.join(', ') + '. Restore the right ~\\.nexadesk\\update-key.pem, or publish once with the recovery key: NexaDesk.bat update -RecoveryKey <file>');
   }
   const keys = [spkiOf(fs.readFileSync(dailyFile)), spkiOf(fs.readFileSync(recPubFile))].map(d => d.toString('base64'));
   fs.writeFileSync(keysJs, 'window.NEXA_UPDATE_KEYS = ' + JSON.stringify(keys) + ';   // public keys the app trusts, written by scripts/sign-manifest.js\n');

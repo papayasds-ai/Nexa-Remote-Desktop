@@ -4,10 +4,9 @@ contextBridge.exposeInMainWorld('nexa', {
   canHost: process.platform === 'win32',   // input injection helper is Windows-only; other OSes are viewer-only
   input: cmd => ipcRenderer.send('nx-input', String(cmd)),
   focus: () => ipcRenderer.send('nx-focus'),
-  warm: () => ipcRenderer.send('nx-warm'),
   otaInstall: o => ipcRenderer.invoke('nx-ota-install', o),
-  onProgress: f => ipcRenderer.on('nx-progress', (_e, o) => f(o)),
   otaApply: () => ipcRenderer.send('nx-ota-apply'),
+  onDownload: f => ipcRenderer.on('nx-dl-progress', (_e, p) => f(p)),
   secret: {
     available: process.platform === 'win32',
     get: () => ipcRenderer.invoke('nx-secret-get'),
@@ -15,9 +14,13 @@ contextBridge.exposeInMainWorld('nexa', {
   },
   power: o => ipcRenderer.invoke('nx-power', o),
   nativeVersion: () => ipcRenderer.invoke('nx-native-version'),
-  fileOpen: o => ipcRenderer.sendSync('nx-file-open', o),
-  fileChunk: (id, buf) => ipcRenderer.send('nx-file-chunk', String(id), new Uint8Array(buf)),
-  fileClose: (id, ok) => ipcRenderer.invoke('nx-file-close', String(id), !!ok),
-  nativeStage: o => ipcRenderer.invoke('nx-native-stage', o),
-  nativeInstall: o => ipcRenderer.invoke('nx-native-install', o)
+  nativeInstall: o => ipcRenderer.invoke('nx-native-install', o),
+  // saved-PC passwords: encrypted with the Windows account key (DPAPI), only readable by this app window
+  vault: { get: () => ipcRenderer.invoke('nx-vault-get'), set: v => ipcRenderer.invoke('nx-vault-set', v) },
+  // run as administrator (so mouse/keyboard also reach Task Manager, installers, other admin windows)
+  admin: o => ipcRenderer.invoke('nx-admin', o || {}),
+  // file transfer to this PC (saved in Downloads\NexaDesk Received)
+  fileOpen: o => ipcRenderer.invoke('nx-file-open', o),
+  fileWrite: (id, bytes) => ipcRenderer.invoke('nx-file-write', id, bytes),
+  fileClose: (id, ok) => ipcRenderer.invoke('nx-file-close', id, ok)
 });

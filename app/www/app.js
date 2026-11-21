@@ -35,7 +35,7 @@ async function sas(pc) { // short code both sides can read aloud to verify the D
 // ---------- state ----------
 const canHost = !!(window.nexa && window.nexa.canHost);
 let deviceKey = S.get('devkey'); if (!deviceKey) { deviceKey = rnd(32); S.set('devkey', deviceKey); }
-let myId = null, iceServers = [], ws = null, retry = null;
+let myId = null, iceServers = [], ws = null, retry = null, icePing = null;
 let pw = null; const invites = new Map();       // code -> expiry
 const pendingAuth = new Map(), fails = new Map();
 let host = null, view = null;
@@ -85,23 +85,11 @@ function iceList() {
   let extra = []; try { extra = JSON.parse(S.get('extraIce', '') || '[]'); } catch (_) {}
   return iceServers.concat(Array.isArray(extra) ? extra : []);
 }
-const hasTurn = () => iceList().some(s => s && (s.username || s.credential));   // a relay (TURN) is what lets phones on mobile data connect
-function relayInfo() { const el = $('#relayInfo'); if (el) el.textContent = hasTurn() ? 'Relay (TURN): available - connections also work from mobile data and strict networks.' : 'Relay (TURN): NOT set up on your server - connections from mobile data (5G/4G) and office networks usually fail. Run START-HERE.bat option T once.'; }
-// relay credentials are issued once per server connection and expire after 12 h: a PC left on for days would lose the relay (phones on 5G could no longer connect), so ask for fresh ones regularly
-setInterval(() => { if (ws && ws.readyState === 1 && myId) send({ t: 'ice' }); }, 20 * 60 * 1000);
-// records what a connection attempt did (candidate types, ICE state) in the Connection log, so a failure can be understood afterwards
-function watchIce(pc, role, peer) {
-  const n = { host: 0, srflx: 0, relay: 0 };
-  const slowT = setTimeout(() => { if (!['connected', 'completed'].includes(pc.iceConnectionState)) { toast('Slow network: connecting through the relay, please wait…'); log(role, peer, 'ICE still ' + pc.iceConnectionState + ' after 12 s'); } }, 12000);
-  pc.addEventListener('connectionstatechange', () => { if (['connected', 'closed'].includes(pc.connectionState)) clearTimeout(slowT); });
-  pc.addEventListener('icecandidate', e => { if (e.candidate && e.candidate.type in n) n[e.candidate.type]++; });
-  pc.addEventListener('iceconnectionstatechange', () => { const s = pc.iceConnectionState; if (['connected', 'failed', 'disconnected'].includes(s)) log(role, peer, 'ICE ' + s + ' (own candidates: ' + n.host + ' host, ' + n.srflx + ' srflx, ' + n.relay + ' relay)'); });
-}
 async function onMsg(m) {
   switch (m.t) {
     case 'ota': checkOta(false, true); break;   // server says a new release was just published
-    case 'welcome': myId = m.id; S.set('lastId', myId); iceServers = m.ice || []; relayInfo(); $('#myId').textContent = fmtId(myId); setStatus('Ready – secure connection', 'ok'); break;
-    case 'ice': iceServers = m.ice || []; relayInfo(); break;   // fresh relay credentials (the old ones expire after 12 h)
+    case 'ice': iceServers = m.ice || iceServers; if (icePing) { icePing(); icePing = null; } break;   // fresh TURN credentials
+    case 'welcome': myId = m.id; S.set('lastId', myId); iceServers = m.ice || []; $('#myId').textContent = fmtId(myId); setStatus('Ready – secure connection', 'ok'); break;
     case 'idtaken': deviceKey = rnd(32); S.set('devkey', deviceKey); send({ t: 'hello', key: deviceKey }); break;
     case 'req': await onReq(m.from); break;
     case 'chal': await onChal(m.from, m.nonce); break;
@@ -134,36 +122,40 @@ async function onAuth(from, mac) {
   }
   fails.delete(from);
   let perm;
-  if (kind === 'password' && S.get('unattended', false)) perm = { control: S.get('defControl', true), clip: S.get('defClip', true) };
+  if (kind === 'password' && S.get('unattended', false)) perm = { control: S.get('defControl', true), clip: S.get('defClip', true), files: S.get('defFiles', true) };
   else perm = await askConsent(from);
   if (!perm) { log('host', from, 'denied by user'); return send({ t: 'deny', to: from, reason: 'The user declined the request.' }); }
   try { await startHost(from, secret, perm); } catch (e) { console.error(e); toast('Could not start screen sharing'); send({ t: 'deny', to: from, reason: 'Host could not capture the screen.' }); endHost(false); }
 }
 function askConsent(from) {
   return new Promise(res => {
-    $('#mdId').textContent = fmtId(from); $('#mdCtl').checked = S.get('defControl', true); $('#mdClip').checked = S.get('defClip', true);
+    $('#mdId').textContent = fmtId(from); $('#mdCtl').checked = S.get('defControl', true); $('#mdClip').checked = S.get('defClip', true); $('#mdFiles').checked = S.get('defFiles', true);
     $('#modal').hidden = false; try { window.nexa && window.nexa.focus(); } catch (_) {}
     const done = v => { $('#modal').hidden = true; clearTimeout(t); res(v); };
     const t = setTimeout(() => done(null), 30000);
-    $('#mdYes').onclick = () => done({ control: $('#mdCtl').checked, clip: $('#mdClip').checked });
+    $('#mdYes').onclick = () => done({ control: $('#mdCtl').checked, clip: $('#mdClip').checked, files: $('#mdFiles').checked });
     $('#mdNo').onclick = () => done(null);
   });
 }
 async function startHost(from, secret, perm) {
-  try { if (perm.control && window.nexa && window.nexa.warm) window.nexa.warm(); } catch (_) {}   // start the input helper now, while the screen-share prompt is open
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 60, max: 60 } }, audio: false });
-  const pc = new RTCPeerConnection({ iceServers: iceList(), iceCandidatePoolSize: 2 }); watchIce(pc, 'host', from);
+  const wantSound = S.get('shareAudio', false); let stream;
+  try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: wantSound }); }
+  catch (e) { if (!wantSound) throw e; stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false }); }   // no sound capture available: share the picture only
+  const pc = new RTCPeerConnection({ iceServers: iceList() });
   host = { peer: from, pc, stream, perm, secret, q: [], remoteSet: false, t0: Date.now() };
-  stream.getTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (_) {} pc.addTrack(t, stream); });
+  stream.getTracks().forEach(t => { if (t.kind === 'video') { try { t.contentHint = 'detail'; } catch (_) {} } pc.addTrack(t, stream); });
+  preferCodec(pc, S.get('codec', 'auto'));
   stream.getVideoTracks()[0].onended = () => endHost(true);
-  const dc = pc.createDataChannel('ctl', { ordered: true }); dc.binaryType = 'arraybuffer'; host.dc = dc;
+  const dc = pc.createDataChannel('ctl', { ordered: true }); host.dc = dc;
   dc.onmessage = e => onHostInput(e.data);
+  const fdc = pc.createDataChannel('file', { ordered: true }); fdc.binaryType = 'arraybuffer'; host.fdc = fdc;   // files from the viewer
+  fdc.onmessage = e => onHostFile(e.data);
   pc.onicecandidate = e => e.candidate && send({ t: 'sig', to: from, data: { ice: e.candidate } });
   pc.onconnectionstatechange = () => { if (['failed', 'closed'].includes(pc.connectionState)) endHost(true); };
   const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
   const sdp = pc.localDescription.sdp;
   send({ t: 'sig', to: from, data: { type: 'offer', sdp, mac: await hmacHex(secret, 'offer:' + sdp) } });
-  pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'video') { const p = s.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}]; p.encodings[0].maxBitrate = 8e6; s.setParameters(p).catch(() => {}); } });
+  applyQuality('auto');
   $('#bnId').textContent = fmtId(from); $('#bnCtl').checked = perm.control; $('#banner').hidden = false;
   log('host', from, 'session started (control=' + perm.control + ')');
   const info = await sas(pc).catch(() => ''); if (info) toast('Session verification code: ' + info);
@@ -171,26 +163,40 @@ async function startHost(from, secret, perm) {
 $('#bnCtl').onchange = e => { if (host) host.perm.control = e.target.checked; };
 $('#bnStop').onclick = () => endHost(true);
 // ---- stream quality presets (chosen by the viewer, applied by the host) ----
-// 'motion' keeps the frame rate up (smooth cursor) and lets the resolution drop under load; 'detail' keeps text sharp but may lower the frame rate
-const QUALITY = { auto: { br: 10e6, hint: 'motion', fps: 60 }, smooth: { br: 3e6, hint: 'motion', fps: 30 }, sharp: { br: 15e6, hint: 'detail', fps: 30 },
-  // for a weak connection (phone on 5G, slow upload at the PC): half the width and height, so every pixel gets 4x the bits = readable text instead of mush
-  lowdata: { br: 2e6, hint: 'detail', fps: 15, scale: 2 } };
+// br = bitrate cap, fps = frame-rate cap, hint = what the encoder protects (detail/text = sharpness, motion = smoothness), max = capture size cap
+const QUALITY = {
+  auto:   { br: 8e6,  fps: 30, hint: 'detail', max: [1920, 1080] },
+  smooth: { br: 2.5e6, fps: 30, hint: 'motion', max: [1280, 720] },
+  sharp:  { br: 15e6, fps: 30, hint: 'detail', max: null },
+  text:   { br: 12e6, fps: 12, hint: 'text',   max: null }       // reading / office work: full resolution, fewer frames, crisp letters
+};
+function preferCodec(pc, name) {                    // optional: put one video codec first (the viewer must support it; otherwise the next one is used)
+  if (!name || name === 'auto') return;
+  try {
+    const caps = RTCRtpSender.getCapabilities('video').codecs, want = caps.filter(c => c.mimeType.toLowerCase() === 'video/' + name.toLowerCase());
+    if (!want.length) return;
+    pc.getTransceivers().forEach(t => { if (t.sender && t.sender.track && t.sender.track.kind === 'video' && t.setCodecPreferences) t.setCodecPreferences([...want, ...caps.filter(c => !want.includes(c))]); });
+  } catch (_) {}
+}
 function applyQuality(q) {
   const c = QUALITY[q]; if (!host || !c) return;
   host.pc.getSenders().forEach(s => {
     if (!s.track || s.track.kind !== 'video') return;
     try { s.track.contentHint = c.hint; } catch (_) {}
     const p = s.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}];
-    p.encodings[0].maxBitrate = c.br; p.encodings[0].maxFramerate = c.fps; p.encodings[0].scaleResolutionDownBy = c.scale || 1; s.setParameters(p).catch(() => {});
+    p.encodings[0].maxBitrate = c.br; p.encodings[0].maxFramerate = c.fps;
+    if (c.hint !== 'motion') p.encodings[0].scaleResolutionDownBy = 1;     // never shrink the picture to save bitrate (that is what makes text mushy)
+    s.setParameters(p).catch(() => {});
+    const m = c.max || [7680, 4320];                                         // capture size: Smooth/Auto cap a 4K screen, Sharp/Text use it all
+    s.track.applyConstraints({ width: { max: m[0] }, height: { max: m[1] }, frameRate: { max: c.fps } }).catch(() => {});
   });
 }
 function endHost(notify) {
   if (!host) return; const h = host; host = null;
   if (notify) send({ t: 'bye', to: h.peer });
-  if (h.rx && window.nexa && window.nexa.fileClose) window.nexa.fileClose(h.rx.id, false);
   try { h.dc && h.dc.close(); } catch (_) {} try { h.pc.close(); } catch (_) {}
   try { h.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
-  $('#banner').hidden = true; log('host', h.peer, 'session ended' + (h.t0 ? ' after ' + Math.round((Date.now() - h.t0) / 1000) + ' s' : '')); 
+  abortRx(); $('#banner').hidden = true; log('host', h.peer, 'session ended' + (h.t0 ? ' after ' + Math.round((Date.now() - h.t0) / 1000) + ' s' : '')); setTimeout(applyWhenIdle, 500);
   if (!S.get('unattended', false)) newPw();       // rotate one-time password after every session
   if (!closing && S.get('lockOnEnd', false) && h.perm && h.perm.control && h.t0 && Date.now() - h.t0 > 3000) lockThisPc();
 }
@@ -200,40 +206,13 @@ function lockThisPc() {                            // same keys as the "Lock PC"
   [...keys].reverse().forEach(vk => window.nexa.input(`K ${vk} 0 ${EXT.has(vk) ? 1 : 0}`));
 }
 const nm = v => typeof v === 'number' && isFinite(v) && v >= 0 && v <= 1;
-function hostChunk(buf) {                          // file bytes from the viewer (control permission was checked when the file was announced)
-  const rx = host && host.rx; if (!rx || !window.nexa || !window.nexa.fileChunk) return;
-  rx.got += buf.byteLength;
-  if (rx.got > rx.size) { host.rx = null; window.nexa.fileClose(rx.id, false); return host.dc.send(JSON.stringify({ k: 'fdeny', why: 'The file was larger than announced.' })); }
-  window.nexa.fileChunk(rx.id, buf);
-}
 function onHostInput(raw) {
-  if (!host) return; if (typeof raw !== 'string') return hostChunk(raw); let m; try { m = JSON.parse(raw); } catch (_) { return; }
+  if (!host) return; let m; try { m = JSON.parse(raw); } catch (_) { return; }
   const inp = c => window.nexa && window.nexa.input(c);
   if (m.k === 'clip') { if (host.perm.clip && typeof m.v === 'string' && m.v.length < 100000) navigator.clipboard.writeText(m.v).catch(() => {}); return; }
   if (m.k === 'getclip') {
     if (!host.perm.clip) return host.dc.send(JSON.stringify({ k: 'clipdeny' }));
     navigator.clipboard.readText().then(v => host.dc && host.dc.send(JSON.stringify({ k: 'clipback', v: String(v).slice(0, 100000) }))).catch(() => {});
-    return;
-  }
-  if (m.k === 'cap') {   // a new viewer asks for the fast mouse channel: unordered, no retransmits (a lost move is simply replaced by the next one)
-    if (m.mv === 1 && !host.mv && host.pc) { host.mv = host.pc.createDataChannel('mv', { ordered: false, maxRetransmits: 0 }); host.mv.onmessage = e => onHostInput(e.data); }
-    return;
-  }
-  if (m.k === 'fs') {                              // viewer announces a file
-    const deny = why => host.dc.send(JSON.stringify({ k: 'fdeny', why }));
-    if (!host.perm.control) return deny('The PC does not allow control, so it cannot receive files.');
-    if (!window.nexa || !window.nexa.fileOpen) return deny('This PC app is too old to receive files. Update it first.');
-    if (host.rx) { window.nexa.fileClose(host.rx.id, false); host.rx = null; }
-    const r = window.nexa.fileOpen({ name: m.name, size: m.size });
-    if (!r || !r.ok) return deny(r && r.why === 'blocked' ? 'This file type is blocked for safety. Put it in a .zip first.' : r && r.why === 'size' ? 'The file is too large (limit 500 MB).' : 'The PC could not receive this file.');
-    host.rx = { id: r.id, name: r.name, size: m.size, got: 0 }; toast('Receiving ' + r.name + '…'); return;
-  }
-  if (m.k === 'fe') {                              // end of file
-    const rx = host.rx; if (!rx) return; host.rx = null;
-    window.nexa.fileClose(rx.id, rx.got === rx.size).then(r => {
-      const ok = !!(r && r.ok); toast(ok ? 'Received ' + rx.name + ' (Downloads\\NexaDesk)' : 'File transfer failed');
-      if (host && host.dc && host.dc.readyState === 'open') host.dc.send(JSON.stringify(ok ? { k: 'fok', name: rx.name } : { k: 'fdeny', why: 'The transfer was incomplete.' }));
-    }).catch(() => {});
     return;
   }
   if (m.k === 'q') { if (typeof m.v === 'string' && Object.prototype.hasOwnProperty.call(QUALITY, m.v)) applyQuality(m.v); return; }
@@ -248,6 +227,35 @@ function onHostInput(raw) {
   }
 }
 
+// ---- files sent by the viewer (only when the host allowed file transfer for this session) ----
+let rx = null;                                   // the file that is arriving right now: { id, got, size, name, q }
+const fsend = o => { try { host && host.fdc && host.fdc.readyState === 'open' && host.fdc.send(JSON.stringify(o)); } catch (_) {} };
+function abortRx() { if (rx) { const r = rx; rx = null; if (window.nexa && window.nexa.fileClose) window.nexa.fileClose(r.id, false).catch(() => {}); } }
+async function onHostFile(d) {
+  if (!host) return;
+  if (!host.perm.files || !window.nexa || !window.nexa.fileOpen) { if (typeof d === 'string') fsend({ k: 'no', why: 'this PC does not allow file transfer' }); return; }
+  if (typeof d === 'string') {
+    let m; try { m = JSON.parse(d); } catch (_) { return; }
+    if (m.k === 'fs') {
+      if (rx) return fsend({ k: 'no', why: 'another file is still arriving' });
+      const size = Number(m.size); if (!(size >= 0)) return fsend({ k: 'no', why: 'bad file size' });
+      const r = await window.nexa.fileOpen({ name: String(m.name || 'file').slice(0, 200), size });
+      if (!r || !r.ok) return fsend({ k: 'no', why: (r && r.why) || 'refused' });
+      rx = { id: r.id, got: 0, size, name: r.name, q: Promise.resolve() };
+      log('host', host.peer, 'receiving file ' + r.name + ' (' + size + ' bytes)'); fsend({ k: 'ok' });
+    } else if (m.k === 'fe' && rx) {
+      const r = rx; rx = null; await r.q;
+      const res = await window.nexa.fileClose(r.id, r.got === r.size);
+      if (res && res.ok) { fsend({ k: 'done', name: r.name }); toast('File received: ' + r.name + ' (Downloads\\NexaDesk Received)'); log('host', host.peer, 'file received: ' + r.name); }
+      else fsend({ k: 'no', why: 'file was incomplete' });
+    } else if (m.k === 'fa') abortRx();
+  } else if (rx) {
+    const r = rx; r.got += d.byteLength;
+    if (r.got > r.size) { abortRx(); return fsend({ k: 'no', why: 'more data than announced' }); }
+    r.q = r.q.then(() => window.nexa.fileWrite(r.id, new Uint8Array(d))).then(ok => { if (!ok && rx === r) { abortRx(); fsend({ k: 'no', why: 'could not write the file' }); } });
+  }
+}
+
 // ---------- VIEWER side ----------
 function connectTo(id, secret) {
   id = (id || '').replace(/\D/g, '');
@@ -257,26 +265,30 @@ function connectTo(id, secret) {
   if (id === myId) return toast('That is your own ID');
   if (view) endView(true);
   view = { to: id, secret, st: 'auth', q: [], remoteSet: false };
-  view.timer = setTimeout(() => { if (view && view.st !== 'live') { toast(hasTurn() ? 'No response from partner' : 'No connection: direct link blocked and no relay (TURN) set up on your server - run START-HERE option T'); endView(false); } }, 60000);
+  view.timer = setTimeout(() => { if (view && view.st !== 'live') { toast('No response from partner'); endView(false); } }, 60000);
   toast('Contacting partner…'); log('viewer', id, 'connecting'); pushRecent(id);
   send({ t: 'req', to: id });
 }
 async function onChal(from, nonce) {
   if (!view || view.to !== from || view.st !== 'auth' || typeof nonce !== 'string') return;
   view.st = 'wait';
-  const pc = new RTCPeerConnection({ iceServers: iceList(), iceCandidatePoolSize: 2 }); view.pc = pc; watchIce(pc, 'viewer', from);
+  const pc = new RTCPeerConnection({ iceServers: iceList() }); view.pc = pc;
   pc.onicecandidate = e => e.candidate && send({ t: 'sig', to: from, data: { ice: e.candidate } });
-  pc.ontrack = e => { $('#vid').srcObject = e.streams[0]; try { e.receiver.playoutDelayHint = 0; } catch (_) {} try { e.receiver.jitterBufferTarget = 0; } catch (_) {} };   // show frames as soon as they arrive
+  pc.ontrack = e => { $('#vid').srcObject = e.streams[0]; if (e.track.kind === 'audio') $('#btnSound').hidden = false; };
   pc.ondatachannel = e => {
-    if (e.channel.label === 'mv') { view.mv = e.channel; return; }
+    if (e.channel.label === 'file') {            // replies of the PC to the files we send
+      view.fdc = e.channel; e.channel.binaryType = 'arraybuffer';
+      e.channel.onmessage = ev => { try { const m = JSON.parse(ev.data); if (view && view.fWait) { const w = view.fWait; view.fWait = null; w(m); } } catch (_) {} };
+      return;
+    }
     view.dc = e.channel; e.channel.onmessage = ev => onPcMsg(ev.data);
-    const sendQ = () => { dcs({ k: 'q', v: S.get('quality', 'auto') }); dcs({ k: 'cap', mv: 1 }); };
+    const sendQ = () => dcs({ k: 'q', v: S.get('quality', 'auto') });
     e.channel.onopen = sendQ; if (e.channel.readyState === 'open') sendQ();
   };
   pc.onconnectionstatechange = async () => {
     if (!view) return;
     if (pc.connectionState === 'connected') { view.st = 'live'; showSession(); }
-    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) { if (pc.connectionState !== 'disconnected') { toast(hasTurn() ? 'Connection lost' : 'Could not connect: direct connection blocked and no relay (TURN) set up on your server - run START-HERE option T'); endView(false); } }
+    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) { if (pc.connectionState !== 'disconnected') { toast('Connection lost'); endView(false); } }
   };
   send({ t: 'auth', to: from, mac: await hmacHex(view.secret, 'auth:' + nonce + ':' + myId + ':' + from) });
 }
@@ -299,23 +311,27 @@ async function onSig(from, d) {
   }
 }
 async function showSession() {
-  clearTimeout(view.timer); $('#session').hidden = false; barsToggle(S.get('barsHidden', Math.min(innerWidth, innerHeight) < 700)); log('viewer', view.to, 'session live'); view.t0 = Date.now();
+  clearTimeout(view.timer); $('#session').hidden = false; log('viewer', view.to, 'session live'); view.t0 = Date.now();
   const code = await sas(view.pc).catch(() => '');
   const upd = async () => {
     if (!view) return; let kind = '?', rtt = '', fps = '';
     try { const st = await view.pc.getStats(); const loc = {}; st.forEach(r => { if (r.type === 'local-candidate') loc[r.id] = r; if (r.type === 'inbound-rtp' && r.kind === 'video' && r.framesPerSecond) fps = Math.round(r.framesPerSecond); });
       st.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') { const l = loc[r.localCandidateId]; kind = l ? (l.candidateType === 'relay' ? 'Relay (TURN)' : l.candidateType === 'host' ? 'Direct (LAN)' : 'Direct (P2P)') : '?'; if (r.currentRoundTripTime) rtt = Math.round(r.currentRoundTripTime * 1000) + ' ms'; } }); } catch (_) {}
-    $('#sesInfo').textContent = `${fmtId(view.to)} · ${kind} ${rtt}${fps ? ' · ' + fps + ' fps' : ''} · verify code ${code}`;
+    const el = Math.round((Date.now() - view.t0) / 1000), clock = String(Math.floor(el / 60)).padStart(2, '0') + ':' + String(el % 60).padStart(2, '0');
+    $('#sesInfo').textContent = `${fmtId(view.to)} · ${kind} ${rtt}${fps ? ' · ' + fps + ' fps' : ''} · ${clock} · verify code ${code}`;
   };
   upd(); view.statTimer = setInterval(upd, 3000);
+  try { if (navigator.wakeLock) view.wake = await navigator.wakeLock.request('screen'); } catch (_) {}   // phone screen stays on during a session
 }
 function endView(notify) {
-  if (!view) return; tpReset(); zoomReset(); const v = view; view = null;
-  clearTimeout(v.timer); clearInterval(v.statTimer);
+  if (!view) return; tpReset(); const v = view; view = null;
+  clearTimeout(v.timer); clearInterval(v.statTimer); try { v.wake && v.wake.release(); } catch (_) {}
+  try { if (v.fdc && v.fdc.readyState === 'open') v.fdc.send(JSON.stringify({ k: 'fa' })); } catch (_) {}
+  $('#btnSound').hidden = true; $('#vid').muted = true; $('#btnSound').textContent = 'Sound off'; $('#xferInfo').textContent = '';
   if (notify) send({ t: 'bye', to: v.to });
   try { v.pc && v.pc.close(); } catch (_) {}
   $('#vid').srcObject = null; $('#session').hidden = true; if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  log('viewer', v.to, 'session ended' + (v.t0 ? ' after ' + Math.round((Date.now() - v.t0) / 1000) + ' s' : '')); 
+  log('viewer', v.to, 'session ended' + (v.t0 ? ' after ' + Math.round((Date.now() - v.t0) / 1000) + ' s' : '')); setTimeout(applyWhenIdle, 500);
 }
 // input capture
 const vid = $('#vid');
@@ -323,22 +339,17 @@ function onPcMsg(raw) {
   let m; try { m = JSON.parse(raw); } catch (_) { return; }
   if (m.k === 'clipback' && typeof m.v === 'string') navigator.clipboard.writeText(m.v).then(() => toast('PC clipboard copied to this device')).catch(() => toast('Could not copy the PC clipboard'));
   if (m.k === 'clipdeny') toast('The PC does not allow clipboard sharing');
-  if (m.k === 'fdeny') { if (view) view.fileStop = true; showProg({ phase: 'error' }); toast(String(m.why || 'The PC refused the file').slice(0, 140)); }
-  if (m.k === 'fok') { showProg({ phase: 'done', label: 'Sent ' + String(m.name || 'file').slice(0, 60) + ' ✓' }); toast('File saved on the PC (Downloads\\NexaDesk)'); }
 }
-function barsToggle(hide) { $('#session').classList.toggle('barsHidden', hide); $('#btnBars').textContent = hide ? '☰' : '✕'; S.set('barsHidden', !!hide); }
-$('#btnBars').onclick = () => barsToggle(!$('#session').classList.contains('barsHidden'));
 $('#btnSwitch').onclick = () => {
   const cur = view && view.to;
   const next = S.get('savedPcs', []).find(p => p.id !== cur);
   endView(true);
   document.querySelector('[data-tab="home"]').click();
-  if (next) { $('#remId').value = next.id; if (next.pw) { $('#remPw').value = next.pw; toast('Press Connect for ' + fmtId(next.id)); } else { $('#remPw').focus(); toast('Enter the password for ' + fmtId(next.id)); } }
+  if (next) { $('#remId').value = next.id; $('#remPw').focus(); toast('Enter the password for ' + fmtId(next.id)); }
   else toast('Save another PC first (Remote Control tab)');
 };
 $('#btnPcClip').onclick = () => { dcs({ k: 'getclip' }); toast('Requesting the PC clipboard…'); };
 const dcs = o => { if (view && view.dc && view.dc.readyState === 'open') view.dc.send(JSON.stringify(o)); };
-const dcm = o => { const c = view && view.mv && view.mv.readyState === 'open' ? view.mv : null; if (c) c.send(JSON.stringify(o)); else dcs(o); };   // mouse moves: fast channel when the host has one
 function norm(e) {
   const r = vid.getBoundingClientRect(), vw = vid.videoWidth, vh = vid.videoHeight; if (!vw) return null;
   let w, h, ox, oy;
@@ -349,24 +360,8 @@ function norm(e) {
 let moveQ = null;
 const btnOf = e => (e.button === 2 ? 'r' : e.button === 1 ? 'm' : 'l');
 const isTouchPtr = e => e.pointerType === 'touch' || e.pointerType === 'pen';
-// ----- zoom: pinch (touch / laptop trackpad), Ctrl+wheel (mouse). The picture scales around the stage centre and the pan stays inside it -----
-const zm = { z: 1, x: 0, y: 0 }, stageEl = vid.parentElement;
-function zoomApply() {
-  const mx = (zm.z - 1) * vid.offsetWidth / 2, my = (zm.z - 1) * vid.offsetHeight / 2;
-  zm.x = Math.max(-mx, Math.min(mx, zm.x)); zm.y = Math.max(-my, Math.min(my, zm.y));
-  vid.style.transform = zm.z === 1 ? '' : `translate(${zm.x}px, ${zm.y}px) scale(${zm.z})`;
-  stageEl.classList.toggle('zoomed', zm.z > 1);
-}
-function zoomReset() { zm.z = 1; zm.x = zm.y = 0; zoomApply(); }
-function zoomAt(cx, cy, z2) {                       // keeps the picture point under (cx, cy) where it is
-  z2 = Math.min(6, Math.max(1, z2)); if (z2 < 1.04) z2 = 1;
-  const r = stageEl.getBoundingClientRect(), px = cx - (r.left + r.width / 2), py = cy - (r.top + r.height / 2), k = z2 / zm.z;
-  zm.x = px - (px - zm.x) * k; zm.y = py - (py - zm.y) * k; zm.z = z2; if (z2 === 1) zm.x = zm.y = 0; zoomApply();
-}
 // ----- mouse on a desktop viewer: absolute positioning, as before -----
-vid.addEventListener('pointermove', e => { if (isTouchPtr(e)) return;
-  if (zm.z > 1) { const r = stageEl.getBoundingClientRect(), m = 36; let ex = 0, ey = 0; if (e.clientX < r.left + m) ex = 1; else if (e.clientX > r.right - m) ex = -1; if (e.clientY < r.top + m) ey = 1; else if (e.clientY > r.bottom - m) ey = -1; if (ex || ey) { zm.x += ex * 14; zm.y += ey * 14; zoomApply(); } }   // zoomed in: pushing the mouse to an edge pans
-  const p = norm(e); if (!p) return; if (!moveQ) requestAnimationFrame(() => { dcm({ k: 'm', ...moveQ }); moveQ = null; }); moveQ = p; });
+vid.addEventListener('pointermove', e => { if (isTouchPtr(e)) return; const p = norm(e); if (!p) return; if (!moveQ) requestAnimationFrame(() => { dcs({ k: 'm', ...moveQ }); moveQ = null; }); moveQ = p; });
 vid.addEventListener('pointerdown', e => { if (isTouchPtr(e)) return; vid.setPointerCapture(e.pointerId); vid.focus(); e.preventDefault(); const p = norm(e); if (p) dcs({ k: 'm', ...p }); dcs({ k: 'd', b: btnOf(e) }); });
 vid.addEventListener('pointerup', e => { if (isTouchPtr(e)) return; dcs({ k: 'u', b: btnOf(e) }); e.preventDefault(); });
 // touch / pen: anywhere on the session screen (not on buttons, sliders or the keyboard field)
@@ -379,7 +374,7 @@ sess.addEventListener('pointermove', e => { if (isTouchPtr(e)) tpMove(e); });
 sess.addEventListener('pointerup', e => { if (isTouchPtr(e)) tpUp(e); });
 sess.addEventListener('pointercancel', e => { if (isTouchPtr(e)) tpUp(e); });
 vid.addEventListener('contextmenu', e => e.preventDefault());
-vid.addEventListener('wheel', e => { if (e.ctrlKey) { zoomAt(e.clientX, e.clientY, zm.z * Math.exp(-e.deltaY * 0.0025)); e.preventDefault(); return; } dcs({ k: 'w', v: -e.deltaY }); e.preventDefault(); }, { passive: false });
+vid.addEventListener('wheel', e => { dcs({ k: 'w', v: -e.deltaY }); e.preventDefault(); }, { passive: false });
 
 // ----- touch / pen on a phone or tablet: trackpad style, the cursor never jumps to the finger -----
 //   drag            = move cursor (relative to finger movement)
@@ -411,7 +406,6 @@ function tpDown(e) {
   } else {                                  // second finger: two-finger gesture (cancels any drag)
     if (tp.dragging) { tp.dragging = false; dcs({ k: 'u', b: 'l' }); }
     tp.gesture = 'two';
-    if (tp.ptrs.size === 2) { const [a, b] = [...tp.ptrs.values()]; tp.d0 = Math.hypot(a.x - b.x, a.y - b.y); tp.zStart = zm.z; tp.zoomMode = false; tp.mx = (a.x + b.x) / 2; tp.my = (a.y + b.y) / 2; }
   }
 }
 function tpMove(e) {
@@ -419,14 +413,7 @@ function tpMove(e) {
   const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
   if (!p.moved && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 10) { p.moved = true; tp.moved = true; clearTimeout(tp.longT); }
   if (tp.gesture === 'point' && tp.ptrs.size === 1) tpSend(dx * sensOf(), dy * sensOf());
-  else if (tp.gesture === 'two') {
-    if (tp.ptrs.size === 2 && tp.d0) {            // two fingers: pinch = zoom, drag while zoomed in = pan, drag at 100% = scroll
-      const [a, b] = [...tp.ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      if (!tp.zoomMode && Math.abs(d - tp.d0) > 16) { tp.zoomMode = true; tp.moved = true; tp.accW = 0; }
-      if (tp.zoomMode) { zoomAt(mx, my, tp.zStart * d / tp.d0); zm.x += mx - tp.mx; zm.y += my - tp.my; zoomApply(); tp.mx = mx; tp.my = my; return; }
-      if (zm.z > 1) { zm.x += dx / 2; zm.y += dy / 2; zoomApply(); return; }
-    }
-    tp.accW += dy * 1.5; const w = Math.trunc(tp.accW); if (w) { tp.accW -= w; dcs({ k: 'w', v: w }); } }
+  else if (tp.gesture === 'two') { tp.accW += dy * 1.5; const w = Math.trunc(tp.accW); if (w) { tp.accW -= w; dcs({ k: 'w', v: w }); } }
 }
 function tpUp(e) {
   const p = tp.ptrs.get(e.pointerId); if (!p) return;
@@ -439,12 +426,12 @@ function tpUp(e) {
   else if (tp.gesture === 'point' && !tp.moved && dur < 250) { clickBtn('l'); leftTap = true; }
   else if (tp.gesture === 'two' && !tp.moved && tp.maxN >= 2 && dur < 400) clickBtn('r');
   tp.lastTapEnd = leftTap ? now : 0;
-  tp.gesture = 'idle'; tp.moved = false; tp.maxN = 0; tp.accW = 0; tp.zoomMode = false; tp.d0 = 0;
+  tp.gesture = 'idle'; tp.moved = false; tp.maxN = 0; tp.accW = 0;
 }
 function tpReset() {
   clearTimeout(tp.longT);
   if (tp.hold || tp.dragging) dcs({ k: 'u', b: 'l' });
-  tp.ptrs.clear(); tp.dragging = false; tp.hold = false; tp.gesture = 'idle'; tp.lastTapEnd = 0; tp.accX = tp.accY = tp.accW = 0; tp.zoomMode = false; tp.d0 = 0;
+  tp.ptrs.clear(); tp.dragging = false; tp.hold = false; tp.gesture = 'idle'; tp.lastTapEnd = 0; tp.accX = tp.accY = tp.accW = 0;
   $('#tpHold').classList.remove('on');
 }
 $('#tpLeft').onclick = () => clickBtn('l');
@@ -504,28 +491,29 @@ kbd.addEventListener('beforeinput', e => {
 });
 $('#btnKbd').onclick = () => { kbd.value = ''; kbd.focus(); };
 $('#btnClip').onclick = async () => { try { dcs({ k: 'clip', v: await navigator.clipboard.readText() }); toast('Clipboard sent'); } catch (_) { toast('Clipboard not available'); } };
-$('#btnFit').onclick = () => { if (zm.z > 1.01) zoomReset(); else vid.classList.toggle('actual'); };   // first press resets a pinch zoom
-const MAX_FILE = 500 * 1024 * 1024, CHUNK = 64 * 1024;
-async function sendFile(f) {                       // viewer -> PC (saved in Downloads\NexaDesk on the PC)
-  const v = view; if (!v || !v.dc || v.dc.readyState !== 'open') return toast('Not connected');
-  if (!f || !f.size) return toast('That file is empty');
-  if (f.size > MAX_FILE) return toast('Files are limited to 500 MB');
-  if (v.sending) return toast('Wait for the current file to finish');
-  v.sending = true; v.fileStop = false; const dc = v.dc; let off = 0, t = 0;
-  dcs({ k: 'fs', name: f.name, size: f.size });
-  try {
-    while (off < f.size) {
-      if (view !== v || dc.readyState !== 'open' || v.fileStop) return;
-      if (dc.bufferedAmount > 4 * 1024 * 1024) await new Promise(r => { dc.bufferedAmountLowThreshold = 1024 * 1024; dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; r(); }; });
-      const buf = await f.slice(off, off + CHUNK).arrayBuffer(); dc.send(buf); off += buf.byteLength;
-      if (Date.now() - t > 200 || off >= f.size) { t = Date.now(); showProg({ phase: 'download', label: 'Sending ' + f.name.slice(0, 40), received: off, total: f.size }); }
-    }
-    dcs({ k: 'fe' }); showProg({ phase: 'verify' });
-  } catch (_) { toast('File transfer interrupted'); showProg({ phase: 'error' }); }
-  finally { v.sending = false; }
+$('#btnSound').onclick = () => { vid.muted = !vid.muted; $('#btnSound').textContent = vid.muted ? 'Sound off' : 'Sound on'; if (!vid.muted) vid.play().catch(() => {}); };
+// send file(s) to the PC: the PC must have allowed file transfer for this session
+const askPc = (o, ms = 15000) => new Promise(res => {
+  const ch = view && view.fdc; if (!ch || ch.readyState !== 'open') return res({ k: 'no', why: 'file channel is not ready' });
+  view.fWait = res; ch.send(JSON.stringify(o));
+  setTimeout(() => { if (view && view.fWait === res) { view.fWait = null; res({ k: 'no', why: 'no answer from the PC' }); } }, ms);
+});
+async function sendFile(f) {
+  const info = $('#xferInfo'), ch = view && view.fdc;
+  const r = await askPc({ k: 'fs', name: f.name, size: f.size }); if (r.k !== 'ok') return toast('Not sent: ' + (r.why || 'refused'));
+  const CH = 32768; let last = 0; ch.bufferedAmountLowThreshold = 1 << 20;
+  for (let off = 0; off < f.size; off += CH) {
+    if (!view || view.fdc !== ch || ch.readyState !== 'open') { info.textContent = ''; return toast('File transfer interrupted'); }
+    if (ch.bufferedAmount > (4 << 20)) await new Promise(res => { ch.onbufferedamountlow = () => { ch.onbufferedamountlow = null; res(); }; });
+    ch.send(await f.slice(off, off + CH).arrayBuffer());
+    const now = Date.now(); if (now - last > 250) { last = now; info.textContent = f.name.slice(0, 24) + ' ' + Math.round(off * 100 / f.size) + '%'; }
+  }
+  const d = await askPc({ k: 'fe' }, 60000); info.textContent = '';
+  toast(d.k === 'done' ? 'Sent: ' + f.name : 'Not completed: ' + (d.why || 'unknown'));
 }
-$('#btnFile').onclick = () => $('#fileIn').click();
-$('#fileIn').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) sendFile(f); };
+$('#btnFile').onclick = () => { $('#fileIn').value = ''; $('#fileIn').click(); };
+$('#fileIn').onchange = async e => { for (const f of [...e.target.files]) { if (!view) break; await sendFile(f); } e.target.value = ''; };
+$('#btnFit').onclick = () => vid.classList.toggle('actual');
 $('#btnFs').onclick = () => { document.fullscreenElement ? document.exitFullscreen() : $('#session').requestFullscreen().catch(() => {}); };
 $('#btnEnd').onclick = () => endView(true);
 
@@ -533,20 +521,60 @@ $('#btnEnd').onclick = () => endView(true);
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   ['home', 'sec', 'set'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
+  if (wantInstall && !inSettings()) { wantInstall = false; applyWhenIdle(true); }
 });
 const copy = async (txt, ok) => { try { await navigator.clipboard.writeText(txt); toast(ok); } catch (_) { toast('Copy failed'); } };
 $('#copyId').onclick = () => myId && copy(myId, 'ID copied');
 $('#copyPw').onclick = () => pw && copy(pw, 'Password copied');
 $('#regenPw').onclick = () => { if (S.get('unattended', false)) toast('Permanent password is active (Security tab)'); else newPw(); };
 $('#remId').addEventListener('input', e => { const d = e.target.value.replace(/\D/g, '').slice(0, 9); e.target.value = d.replace(/(\d{3})(?=\d)/g, '$1 '); });
+// Saved passwords: Windows app = encrypted with the Windows account key (DPAPI); Android/browser = AES-GCM with a non-extractable key kept in IndexedDB.
+const Vault = (() => {
+  const win = window.nexa && window.nexa.vault;
+  const idb = () => new Promise((ok, bad) => { const r = indexedDB.open('nx-vault', 1); r.onupgradeneeded = () => r.result.createObjectStore('k'); r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error); });
+  const idbGet = async () => { const db = await idb(); return new Promise((ok, bad) => { const q = db.transaction('k').objectStore('k').get('key'); q.onsuccess = () => ok(q.result); q.onerror = () => bad(q.error); }); };
+  const idbPut = async k => { const db = await idb(); return new Promise((ok, bad) => { const t = db.transaction('k', 'readwrite'); t.objectStore('k').put(k, 'key'); t.oncomplete = () => ok(); t.onerror = () => bad(t.error); }); };
+  const key = async () => { let k = await idbGet(); if (!k) { k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); await idbPut(k); } return k; };
+  return {
+    async load() {
+      try {
+        if (win) return JSON.parse((await win.get()) || '{}');
+        const raw = localStorage.getItem('nx_vault'); if (!raw) return {};
+        const b = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+        return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(0, 12) }, await key(), b.slice(12))));
+      } catch (_) { return {}; }
+    },
+    async save(o) {
+      try {
+        const txt = JSON.stringify(o);
+        if (win) return !!(await win.set(txt));
+        const iv = crypto.getRandomValues(new Uint8Array(12)), ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await key(), enc.encode(txt)));
+        const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+        localStorage.setItem('nx_vault', btoa(String.fromCharCode(...out))); return true;
+      } catch (_) { return false; }
+    }
+  };
+})();
+let vaultData = {};                                    // { partnerId: password }
+Vault.load().then(v => { vaultData = v || {}; renderSaved(); });
+async function rememberPc(id, pass) {                  // save the PC (and its password) for one-tap connect
+  const l = S.get('savedPcs', []); if (!l.some(p => p.id === id)) { l.unshift({ id, label: 'PC ' + fmtId(id) }); S.set('savedPcs', l.slice(0, 50)); }
+  if (pass) { vaultData[id] = pass; if (!(await Vault.save(vaultData))) { delete vaultData[id]; toast('Could not store the password securely'); } }
+  renderSaved();
+}
 function renderSaved() {
   const box = $('#savedPcs'); box.innerHTML = '';
   const list = S.get('savedPcs', []);
   if (!list.length) { box.textContent = 'No saved PCs yet.'; return; }
   list.forEach((p, i) => {
     const row = document.createElement('div');
-    const go = document.createElement('button'); go.textContent = (p.label || 'PC') + '  ·  ' + fmtId(p.id) + (p.pw ? '  🔑' : '');
-    go.onclick = () => { $('#remId').value = fmtId(p.id); if (p.pw) { $('#remPw').value = p.pw; $('#connectBtn').click(); } else $('#remPw').focus(); };   // saved password = one tap to connect
+    const has = !!vaultData[p.id];
+    const go = document.createElement('button'); go.textContent = (has ? '🔑 ' : '') + (p.label || 'PC') + '  ·  ' + fmtId(p.id);
+    go.onclick = () => {
+      $('#remId').value = fmtId(p.id);
+      if (has) { toast('Connecting to ' + (p.label || fmtId(p.id)) + '…'); connectTo(p.id, vaultData[p.id]); }   // saved password: connect at once
+      else $('#remPw').focus();
+    };
     const ed = document.createElement('button'); ed.textContent = '✎'; ed.title = 'Rename';
     ed.onclick = () => {                                  // inline rename (window.prompt does not exist in the Windows app)
       const inp = document.createElement('input'); inp.value = p.label || ''; inp.maxLength = 24; inp.placeholder = 'Name, e.g. Office PC';
@@ -556,8 +584,8 @@ function renderSaved() {
       inp.onblur = save;
       row.replaceChild(inp, go); inp.focus(); inp.select();
     };
-    const x = document.createElement('button'); x.textContent = '✕'; x.title = 'Remove';
-    x.onclick = () => { const l = S.get('savedPcs', []); l.splice(i, 1); S.set('savedPcs', l); renderSaved(); };
+    const x = document.createElement('button'); x.textContent = '✕'; x.title = 'Remove (and forget its password)';
+    x.onclick = async () => { const l = S.get('savedPcs', []); l.splice(i, 1); S.set('savedPcs', l); if (vaultData[p.id]) { delete vaultData[p.id]; await Vault.save(vaultData); } renderSaved(); };
     row.append(go, ed, x); box.appendChild(row);
   });
 }
@@ -573,7 +601,7 @@ function renderRecent() {
   l.forEach(id => {
     const s = saved.find(p => p.id === id);
     const b = document.createElement('button'); b.textContent = (s && s.label ? s.label + ' · ' : '') + fmtId(id);
-    b.onclick = () => { $('#remId').value = fmtId(id); if (s && s.pw) { $('#remPw').value = s.pw; $('#connectBtn').click(); } else $('#remPw').focus(); };
+    b.onclick = () => { $('#remId').value = fmtId(id); $('#remPw').focus(); };
     row.appendChild(b);
   });
   box.appendChild(row);
@@ -581,14 +609,17 @@ function renderRecent() {
 $('#savePc').onclick = () => {
   const id = $('#remId').value.replace(/\D/g, '');
   if (id.length < 6) return toast('Enter the partner ID first');
-  const old = S.get('savedPcs', []).find(p => p.id === id);
-  const l = S.get('savedPcs', []).filter(p => p.id !== id);
-  const pw = $('#remPw').value.trim();                 // full credentials: the password typed in the box is saved with the ID (on this device only)
-  l.unshift({ id, label: (old && old.label) || 'PC ' + fmtId(id), pw: pw || (old && old.pw) || '' });
-  S.set('savedPcs', l.slice(0, 50)); renderSaved(); toast(pw ? 'Saved with password' : 'Saved');
+  const old = S.get('savedPcs', []).find(p => p.id === id), pass = $('#remSave').checked ? $('#remPw').value.trim() : '';
+  if ($('#remSave').checked && !pass && !vaultData[id]) toast('Type the password first to remember it');
+  const l = S.get('savedPcs', []).filter(p => p.id !== id); l.unshift({ id, label: old && old.label ? old.label : 'PC ' + fmtId(id) }); S.set('savedPcs', l.slice(0, 50));
+  rememberPc(id, pass).then(() => toast(pass ? 'Saved with password' : 'Saved'));
 };
-renderSaved(); renderRecent();
-$('#connectBtn').onclick = () => { connectTo($('#remId').value, $('#remPw').value.trim()); $('#remPw').value = ''; };
+renderRecent();
+$('#connectBtn').onclick = () => {
+  const id = $('#remId').value.replace(/\D/g, ''), pass = $('#remPw').value.trim();
+  if ($('#remSave').checked && id.length === 9 && pass) rememberPc(id, pass);      // tick Remember = this PC and its password are kept for one-tap connect
+  connectTo($('#remId').value, pass || vaultData[id] || ''); $('#remPw').value = '';
+};
 $('#remPw').addEventListener('keydown', e => e.key === 'Enter' && $('#connectBtn').click());
 $('#newInvite').onclick = () => { const c = genSecret(12); invites.clear(); invites.set(c, Date.now() + 10 * 60000); $('#inviteCode').textContent = c; };
 $('#copyInvite').onclick = () => validInvites().length && copy([...invites.keys()][0], 'Invite copied');
@@ -596,6 +627,10 @@ $('#optUnattended').checked = S.get('unattended', false);
 $('#optControl').checked = S.get('defControl', true); $('#optClip').checked = S.get('defClip', true);
 $('#optUnattended').onchange = e => { const on = e.target.checked; if (on && permPwCache.length < 12) { e.target.checked = false; return toast('Set a permanent password (12+ chars) first'); } S.set('unattended', on); newPw(); };
 $('#optControl').onchange = e => S.set('defControl', e.target.checked); $('#optClip').onchange = e => S.set('defClip', e.target.checked);
+document.querySelectorAll('.hostonly').forEach(e => { e.hidden = !canHost; });
+$('#optFiles').checked = S.get('defFiles', true); $('#optFiles').onchange = e => S.set('defFiles', e.target.checked);
+$('#optSound').checked = S.get('shareAudio', false); $('#optSound').onchange = e => { S.set('shareAudio', e.target.checked); toast(e.target.checked ? 'This PC will share its sound (from the next session)' : 'Sound sharing: off'); };
+$('#optCodec').value = S.get('codec', 'auto'); $('#optCodec').onchange = e => { S.set('codec', e.target.value); toast('Video codec applies from the next session'); };
 $('#rowLockEnd').hidden = !canHost;
 $('#optLockEnd').checked = S.get('lockOnEnd', false);
 $('#optLockEnd').onchange = e => { S.set('lockOnEnd', e.target.checked); toast(e.target.checked ? 'This PC will lock when a remote session ends' : 'Lock after session: off'); };
@@ -606,10 +641,28 @@ if (canHost && window.nexa.power) {
   aw.checked = S.get('keepAwake', false);
   window.nexa.power({ keepAwake: aw.checked }).then(r => { if (r && r.ok) au.checked = !!r.autostart; }).catch(() => {});
   aw.onchange = async e => { S.set('keepAwake', e.target.checked); const r = await window.nexa.power({ keepAwake: e.target.checked }); toast(r && r.ok ? (e.target.checked ? 'This PC will not go to sleep while NexaDesk runs' : 'Sleep is allowed again') : 'Could not change this'); };
-  au.onchange = async e => { const r = await window.nexa.power({ autostart: e.target.checked }); if (!r || !r.ok) { e.target.checked = !e.target.checked; return toast('Could not change this (install the app first)'); } toast(e.target.checked ? 'NexaDesk will start when you sign in' : 'Autostart: off'); };
-  const tr = $('#optTray'); tr.checked = S.get('trayOn', false);
+  const tr = $('#optTray'); tr.checked = S.get('tray', false);
   window.nexa.power({ tray: tr.checked }).catch(() => {});
-  tr.onchange = async e => { S.set('trayOn', e.target.checked); const r = await window.nexa.power({ tray: e.target.checked }); toast(r && r.ok ? (e.target.checked ? 'Closing the window now keeps NexaDesk running in the tray' : 'Closing the window quits NexaDesk again') : 'Could not change this'); };
+  tr.onchange = async e => { S.set('tray', e.target.checked); const r = await window.nexa.power({ tray: e.target.checked }); toast(r && r.ok ? (e.target.checked ? 'Closing the window now keeps NexaDesk running in the tray' : 'Closing the window quits NexaDesk') : 'Could not change this'); };
+  au.onchange = async e => { const r = await window.nexa.power({ autostart: e.target.checked }); if (!r || !r.ok) { e.target.checked = !e.target.checked; return toast('Could not change this (install the app first)'); } toast(e.target.checked ? 'NexaDesk will start when you sign in' : 'Autostart: off'); };
+}
+// administrator mode: input into elevated windows (Task Manager, installers, other admin tools) only works when NexaDesk itself runs elevated
+if (canHost && window.nexa.admin) {
+  const refreshAdmin = async () => {
+    const r = await window.nexa.admin({}); if (!r || !r.ok) return;
+    $('#pcCard').hidden = false; $('#adminCard').hidden = false;
+    $('#adminState').textContent = r.elevated ? 'Running as administrator: the remote mouse and keyboard also work in Task Manager and other admin windows. (The Windows sign-in / UAC secure screen cannot be controlled by any normal program.)'
+      : 'Running normally: Windows ignores the remote mouse and keyboard in admin windows such as Task Manager. Restart as administrator to control them.';
+    $('#btnElevate').hidden = r.elevated; $('#rowAdminAuto').hidden = !(r.elevated && r.packaged); $('#optAdminAuto').checked = !!r.task;
+  };
+  $('#btnElevate').onclick = async () => { toast('Windows will ask for permission…'); const r = await window.nexa.admin({ relaunch: true }); if (!r || !r.ok) toast('Cancelled: NexaDesk keeps running normally'); };
+  $('#optAdminAuto').onchange = async e => {
+    const r = await window.nexa.admin({ autostart: e.target.checked });
+    if (!r || !r.ok) { e.target.checked = !e.target.checked; return toast('Could not change this' + (r && r.why ? ' (' + r.why + ')' : '')); }
+    if (e.target.checked && $('#optAutostart')) $('#optAutostart').checked = false;
+    toast(e.target.checked ? 'NexaDesk will start as administrator when you sign in' : 'Administrator autostart: off');
+  };
+  refreshAdmin();
 }
 $('#savePerm').onclick = async () => {
   const v = $('#permPw').value; if (v.length < 12) return toast('Use at least 12 characters');
@@ -621,6 +674,40 @@ $('#savePerm').onclick = async () => {
 loadPermPw().then(newPw);
 $('#clearLog').onclick = () => { S.set('log', []); renderLog(); };
 $('#srvUrl').value = S.get('server', window.NEXA_DEFAULT_SERVER || ''); $('#extraIce').value = S.get('extraIce', '');
+$('#addTurn').onclick = () => {
+  const host = $('#turnHost').value.trim().replace(/^turns?:/i, ''), user = $('#turnUser').value.trim(), pass = $('#turnPass').value;
+  if (!/^[\w.-]+(:\d{2,5})?$/.test(host) || !user || !pass) return toast('Enter host:port, username and password');
+  let list = []; try { list = JSON.parse($('#extraIce').value || '[]'); if (!Array.isArray(list)) list = []; } catch (_) { return toast('The ICE list is not valid JSON; fix or clear it first'); }
+  const h = host.includes(':') ? host : host + ':3478';
+  list = list.filter(x => !(x && JSON.stringify(x.urls || '').includes(h)));
+  list.push({ urls: ['turn:' + h + '?transport=udp', 'turn:' + h + '?transport=tcp'], username: user, credential: pass });
+  $('#extraIce').value = JSON.stringify(list); $('#turnPass').value = ''; toast('Added - press Save & reconnect, then Test connection');
+};
+// what can this network do? Gathers the same candidates a real session would use and reports host / STUN / TURN results and TURN errors
+$('#testConn').onclick = async () => {
+  const box = $('#testBox'), lines = []; const say = t => { lines.push(t); box.textContent = lines.join('\n'); };
+  $('#testConn').disabled = true;
+  try {
+    say(ws && ws.readyState === 1 && myId ? 'Signaling server: connected (your ID ' + fmtId(myId) + ')' : 'Signaling server: NOT connected: check the server URL');
+    if (ws && ws.readyState === 1 && myId) { const t = performance.now(); await new Promise(res => { icePing = res; send({ t: 'ice' }); setTimeout(res, 5000); }); say('  answer time: ' + Math.round(performance.now() - t) + ' ms'); }
+    const servers = iceList(), withTurn = servers.some(sv => sv.username);
+    say(servers.length + ' ICE server entries (' + (withTurn ? 'with TURN' : 'no TURN') + ')');
+    const seen = { host: 0, srflx: 0, relay: 0 }, errs = []; let relayMs = null; const t0 = performance.now();
+    const pc = new RTCPeerConnection({ iceServers: servers }); pc.createDataChannel('t');
+    pc.onicecandidate = e => { const m = e.candidate && / typ (host|srflx|relay)/.exec(e.candidate.candidate); if (m) { seen[m[1]]++; if (m[1] === 'relay' && relayMs === null) relayMs = Math.round(performance.now() - t0); } };
+    pc.onicecandidateerror = e => { if (e.errorCode !== 701 || !/^stun/.test(e.url || '')) errs.push((e.url || '?') + ' → ' + e.errorCode + ' ' + (e.errorText || '')); };
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise(res => { const t = setTimeout(res, 9000); pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }; });
+    pc.close();
+    say('Local (LAN) addresses: ' + seen.host + '   Public address via STUN: ' + seen.srflx + '   TURN relay: ' + seen.relay + (relayMs !== null ? ' (first in ' + relayMs + ' ms)' : ''));
+    errs.slice(0, 4).forEach(x => say('  problem: ' + x + (/401|403/.test(x) ? '  (username/password rejected)' : /701/.test(x) ? '  (server unreachable, check host:port / firewall)' : '')));
+    say(seen.relay ? '✔ Relay works: connections over mobile data and strict networks are possible.'
+      : withTurn ? '✘ TURN is configured but gave no relay address. Check host, port, username and password above.'
+      : '✘ No TURN server: over mobile data (5G) or strict networks a connection can fail. Add one above (Metered / ExpressTURN free plans work).');
+    if (!seen.srflx && !seen.relay) say('⚠ Nothing reachable from outside: UDP may be blocked on this network.');
+  } catch (e) { say('Test failed: ' + (e && e.message || e)); }
+  $('#testConn').disabled = false;
+};
 $('#saveSet').onclick = () => { const u = $('#srvUrl').value.trim(); if (!/^wss?:\/\//.test(u)) return toast('URL must start with wss:// or ws://'); S.set('server', u); S.set('srvManual', true); S.set('extraIce', $('#extraIce').value); connectWS(); toast('Saved'); };
 if (!canHost) { $('#myPw').textContent = 'Viewer mode'; $('#hostHint').textContent = 'This device controls other computers. Install the Windows app on a computer you want to access.'; $('#copyPw').hidden = $('#regenPw').hidden = true; }
 else newPw();
@@ -647,17 +734,24 @@ function adoptServer(m) {                                  // server address is 
     S.set('server', m.server); $('#srvUrl').value = m.server; connectWS();
   }
 }
+const autoUpd = () => S.get('autoUpdate', true) !== false;   // default: install updates automatically
 function ulog(msg) {                                         // visible record of the update process
   const l = S.get('updLog', []); l.push(new Date().toLocaleTimeString() + '  ' + msg);
   S.set('updLog', l.slice(-40)); const box = document.querySelector('#updLogBox'); if (box) box.textContent = S.get('updLog', []).join('\n');
 }
-function applyPending() {                                   // swap in the downloaded web layer (Windows: reload, Android: activate bundle)
-  const p = pend; if (!p) throw new Error('nothing downloaded');
+const inSettings = () => !$('#tab-set').hidden || !$('#tab-sec').hidden;
+let wantInstall = false;                                    // the user pressed Install while in Settings
+function applyWhenIdle(force, now) {                         // never interrupt a live session; never reload while in Settings
+  if (!pend || host || view) return;
+  if (!force && !autoUpd()) return;                          // manual mode: wait for the Install button
+  if (!now && inSettings()) return;                          // a reload would send the user back to the home tab
   const la = S.get('lastApply', null);
-  if (la && la.version === p.version && Date.now() - la.t < 600000) {      // applied a moment ago and the app still reports the old version: do not loop
-    pend = null; throw new Error('Update v' + la.version + ' was downloaded but did not take effect. Reinstall the app once (see README).');
+  if (la && la.version === pend.version && Date.now() - la.t < 600000) {
+    // applied a moment ago and the app still reports the old version: do not loop, tell the user
+    pend = null; $('#updBox').textContent = 'Update v' + la.version + ' was downloaded but did not take effect. Reinstall the app once (see README).';
+    return;
   }
-  pend = null; S.set('lastApply', { version: p.version, t: Date.now() });
+  const p = pend; pend = null; S.set('lastApply', { version: p.version, t: Date.now() }); toast('Updating to v' + p.version + '…');
   ulog('applying v' + p.version + (p.id ? ' (android bundle ' + p.id.slice(0, 8) + ')' : ' (windows)'));
   setTimeout(() => {
     if (p.id && CU()) CU().set({ id: p.id }).catch(e => ulog('android activation failed: ' + (e && e.message || e)));
@@ -676,133 +770,103 @@ async function verifyManifest(text, sigB64) {                // accepted when AN
   }
   return false;
 }
-// ---------- update progress bar (percent, size, speed, time left) ----------
-const fmtB = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
-let progT0 = 0, progLast = null, updUI = null, updWait = null;
-const dockR = () => ({ box: $('#updProg'), fill: $('#progFill'), lbl: $('#progLbl'), pct: $('#progPct'), size: $('#progSize'), speed: $('#progSpeed'), base: '' });
-function showProg(o) {
-  const R = updUI ? updUI.r : dockR(), box = R.box; if (!box) return;
-  const ph = o.phase, fill = R.fill, now = Date.now(), cls = c => (R.base + ' ' + c).trim();
-  box.hidden = false; fill.className = R.base;
-  if (ph === 'download') {
-    if (!progT0 || o.received < (progLast ? progLast.r : 0)) { progT0 = now; }
-    progLast = { r: o.received };
-    const el = Math.max(0.3, (now - progT0) / 1000), sp = o.received / el, pct = o.total ? Math.min(100, o.received / o.total * 100) : null;
-    R.lbl.textContent = o.label || ((o.kind === 'native' ? 'Downloading app update' : 'Downloading update') + (o.version ? ' v' + o.version : ''));
-    R.pct.textContent = pct === null ? '' : Math.floor(pct) + '%';
-    if (pct === null) fill.className = cls('ind'); else fill.style.width = pct + '%';
-    if (o.pctOnly) { R.size.textContent = ''; R.speed.textContent = ''; return; }
-    R.size.textContent = fmtB(o.received) + (o.total ? ' / ' + fmtB(o.total) : '');
-    const left = o.total && sp > 0 ? Math.ceil((o.total - o.received) / sp) : 0;
-    R.speed.textContent = (o.received ? fmtB(sp) + '/s' : '') + (left ? ' · ' + (left >= 60 ? Math.floor(left / 60) + 'm ' + (left % 60) + 's' : left + 's') + ' left' : '');
-  } else if (ph === 'verify' || ph === 'install') {
-    progT0 = 0; fill.style.width = '100%';
-    R.lbl.textContent = ph === 'verify' ? 'Verifying download…' : 'Installing update…'; R.pct.textContent = ''; R.size.textContent = ''; R.speed.textContent = '';
-    if (ph === 'install' && updUI && o.kind === 'native' && updUI.installText) updUI.status.textContent = updUI.installText;
-  } else if (ph === 'done') {
-    progT0 = 0; fill.style.width = '100%'; R.lbl.textContent = o.label || 'Update downloaded and verified ✓'; R.pct.textContent = '100%';
-    if (!updUI) setTimeout(() => { if (!progT0) box.hidden = true; }, 6000);
-  } else if (ph === 'error') {
-    progT0 = 0; fill.className = cls('err'); R.lbl.textContent = 'Update failed'; R.pct.textContent = '';
-  }
+const fmtMB = n => (n / 1048576).toFixed(1);
+function showDl(p) {                                         // live download progress (percent, size, speed, which host)
+  const pct = p.pct != null ? Math.round(p.pct) : p.total ? Math.min(100, Math.round(p.got * 100 / p.total)) : null;
+  let t = p.label + ' - ' + (pct === null ? 'downloading' : pct + '%');
+  if (p.got) t += ' · ' + fmtMB(p.got) + (p.total ? '/' + fmtMB(p.total) : '') + ' MB';
+  if (p.speed) t += ' · ' + fmtMB(p.speed) + ' MB/s';
+  if (p.host) t += ' · ' + p.host;
+  $('#updBox').textContent = t;
+  const bar = $('#dlBar'); bar.hidden = false; bar.firstElementChild.style.width = (pct === null ? 8 : pct) + '%';
+  if (p.done || pct === 100) setTimeout(() => { bar.hidden = true; }, 900);
 }
-if (window.nexa && window.nexa.onProgress) window.nexa.onProgress(showProg);
+if (window.nexa && window.nexa.onDownload) window.nexa.onDownload(showDl);
+const MIRROR_PREFIX_RE = /^https:\/\/(raw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+\/HEAD\/ota\/|github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/ota\/)$/;
+let dlListening = false;
 async function stageUpdate(m) {                              // download + verify the bundle; does not apply it
   const url = otaBase() + '/' + m.bundle, cu = CU();
+  const mw = m.mirrors && MIRROR_PREFIX_RE.test(m.mirrors.web || '') && /raw\.githubusercontent/.test(m.mirrors.web) ? [m.mirrors.web + m.bundle] : [];   // backup copy on GitHub
   toast('Downloading update v' + m.version + '…');
   if (window.nexa && window.nexa.otaInstall) {
-    const res = await window.nexa.otaInstall({ url, version: m.version, sha256: m.sha256 });
+    const res = await window.nexa.otaInstall({ url, urls: mw, version: m.version, sha256: m.sha256 });
     if (!res || !res.ok) { ulog('download v' + m.version + ' failed: ' + JSON.stringify(res || {})); throw new Error('install'); }
     pend = { version: m.version }; ulog('downloaded v' + m.version + ' (windows)');
   } else if (cu) {
     try { const l = await cu.list(), c = await cu.current(); for (const b of (l.bundles || [])) if (b.id !== c.bundle.id && b.id !== 'builtin') await cu.delete({ id: b.id }).catch(() => {}); } catch (_) {}
-    let lis = null; try { lis = await cu.addListener('download', e => showProg({ phase: 'download', version: m.version, received: Math.round((e.percent || 0)), total: 100, pctOnly: true })); } catch (_) {}
-    let b; try { b = await cu.download({ url, version: m.version, checksum: m.sha256 }); } catch (e) { ulog('download v' + m.version + ' failed: ' + (e && e.message || e)); try { lis && lis.remove(); } catch (_) {} showProg({ phase: 'error' }); throw e; }
-    try { lis && lis.remove(); } catch (_) {} showProg({ phase: 'done' });
+    if (!dlListening) { dlListening = true; try { cu.addListener('download', ev => showDl({ label: 'Update v' + m.version, pct: ev && ev.percent })); } catch (_) {} }
+    let b, lastErr;
+    for (const u of [url, ...mw]) {                           // own server first, then the GitHub copy
+      try { b = await cu.download({ url: u, version: m.version, checksum: m.sha256 }); break; } catch (e) { lastErr = e; ulog('download v' + m.version + ' from ' + u.split('/')[2] + ' failed: ' + (e && e.message || e)); }
+    }
+    if (!b) throw lastErr || new Error('download');
     pend = { id: b.id, version: m.version }; ulog('downloaded v' + m.version + ' (android)');
   } else throw new Error('install');
 }
-function updMsg(text) { $('#updBox').textContent = text; const m = $('#updMsg'); if (m) { m.textContent = text; $('#updProg').hidden = false; } }
-// ================= ONE update flow: every update is mandatory and always shows the same pop-up =================
-// (automatic check, push from the server, or the Check button): "Update required" -> Install now (or starts by itself after 30 s)
-// -> progress bar -> finished. Windows Setup updates then open the installer, whose last page asks to run NexaDesk.
-// Three pieces can change, each delivered the cheapest way: web layer (UI/logic), Windows shell (Setup), Android shell (APK).
-const INTERACTIVE_FROM = '1.0.31';                // app packages from this version open the visible installer; older ones update silently
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
-let nativeStagedV = '';
-function openUpdateDialog(plan) {
-  if (updUI) return;
-  const wrap = mk('div', 'updWrap'), box = mk('div', 'updBox');
-  const status = mk('div', 'updStatus', plan.intro), prog = mk('div', 'updProgWrap'), cd = mk('div', 'updCd'), btn = mk('button', 'primary', plan.btn);
-  const top = mk('div', 'progTop'), lbl = mk('span'), pct = mk('span'), track = mk('div', 'progBar'), fill = mk('div', 'pf'), sub = mk('div', 'progSub'), size = mk('span'), speed = mk('span');
-  top.append(lbl, pct); track.append(fill); sub.append(size, speed); prog.append(top, track, sub); prog.hidden = true;
-  box.append(mk('div', 'updTitle', 'Update required'), mk('div', 'updVer', 'NexaDesk v' + plan.version + (plan.from ? ' (this device has v' + plan.from + ')' : '')),
-    mk('div', 'updNotes', plan.notes ? "What's new: " + plan.notes : ''), status, prog, cd, btn);
-  wrap.append(box); document.body.append(wrap); document.body.classList.add('updOpen');
-  updUI = { wrap, status, btn, cd, prog, installText: plan.installText || '', r: { box: prog, fill, lbl, pct, size, speed, base: 'pf' } };
-  let n = 30, busy = false, timer = null;
-  const tick = () => { updUI.cd.textContent = 'Starting automatically in ' + n + ' s'; if (n-- > 0) return; clearInterval(timer); go(); };
-  const arm = secs => { clearInterval(timer); n = secs; tick(); timer = setInterval(tick, 1000); };
-  async function go() {
-    if (busy) return; busy = true; clearInterval(timer); updUI.cd.textContent = ''; btn.disabled = true;
-    if (host) endHost(true); if (view) endView(true);
-    progT0 = 0; progLast = null; updUI.status.textContent = plan.working; prog.hidden = false;
-    try { await plan.run(); if (plan.kind === 'apk') { busy = false; btn.disabled = false; btn.textContent = 'Download again'; } }
-    catch (e) {
-      busy = false; progT0 = 0; showProg({ phase: 'error' }); ulog('update failed: ' + (e && e.message || e));
-      updUI.status.textContent = 'The update could not finish: ' + String((e && e.message) || e).slice(0, 120); btn.disabled = false; btn.textContent = 'Try again'; arm(20);
-    }
-  }
-  btn.onclick = go;
-  if (plan.auto) arm(30); else cd.textContent = '';
+function showReady(v) {                                      // manual mode: tell the user, they decide when
+  $('#updBox').textContent = 'Update v' + v + ' is ready. It installs when you press Install (never during a session).';
+  $('#installUpd').hidden = false; toast('Update v' + v + ' is ready - press Install in Settings');
 }
-const buildPlan = async (m, ok) => {
-  const notes = typeof m.notes === 'string' ? m.notes.slice(0, 300) : '', nat = m.native;
-  if (nat && nat.windows && window.nexa && window.nexa.nativeInstall && window.nexa.nativeVersion) {      // Windows app: the new Setup contains the new web layer too
+let forceTimer = null;
+function forceNow(v) {                                       // mandatory update: 30 s warning, then installs
+  if (forceTimer) return;
+  let n = 30;
+  const show = () => { $('#updBox').textContent = 'Mandatory update v' + v + ' installs in ' + n + ' s. Active sessions will be disconnected.'; };
+  show(); toast('Mandatory update v' + v + ' is installing');
+  forceTimer = setInterval(() => {
+    n--;
+    if (n > 0) return show();
+    clearInterval(forceTimer); forceTimer = null;
+    if (host) endHost(true);
+    if (view) endView(true);
+    applyWhenIdle(true, true);
+  }, 1000);
+}
+function withCountdown(label, fn) {
+  let n = 30;
+  const show = () => { $('#updBox').textContent = label + ' installs in ' + n + ' s. Active sessions will be disconnected.'; };
+  show();
+  const t = setInterval(() => { n--; if (n > 0) return show(); clearInterval(t); if (host) endHost(true); if (view) endView(true); fn(); }, 1000);
+}
+function whenIdle(fn) { const t = setInterval(() => { if (!host && !view) { clearInterval(t); fn(); } }, 2000); }
+let nativePend = false;                                    // an app-package install is already scheduled or running
+async function installNativeNow(nat) {
+  toast('Installing app update v' + nat.version + '…');
+  const r = await window.nexa.nativeInstall({ url: nat.windows.url, urls: nat.windows.mirror ? [nat.windows.mirror] : [], sha256: nat.windows.sha256, version: nat.version });
+  ulog('app installer v' + nat.version + ': ' + (r && r.ok ? 'started' : 'failed (' + ((r && r.why) || 'unknown') + ')'));
+  if (!r || !r.ok) { nativePend = false; toast('App update failed: ' + ((r && r.why) || 'unknown')); }
+}
+async function handleNative(m, forceN) {
+  const nat = m.native; if (!nat) return;
+  if (nat.windows && window.nexa && window.nexa.nativeInstall && window.nexa.nativeVersion) {
     const cur = await window.nexa.nativeVersion();
     if (cur && cmpv(nat.version, cur) > 0) {
-      if (nativeStagedV !== nat.version && window.nexa.nativeStage) { nativeStagedV = nat.version; window.nexa.nativeStage({ url: nat.windows.url, sha256: nat.windows.sha256, version: nat.version }).then(r => { if (!r || !r.ok) nativeStagedV = ''; }).catch(() => { nativeStagedV = ''; }); }
-      const visible = cmpv(cur, INTERACTIVE_FROM) >= 0;
-      return { kind: 'win', version: nat.version, from: cur, notes, auto: true, btn: 'Install now',
-        intro: 'A new version is required. It downloads, then the installer opens' + (visible ? ' and asks you to run NexaDesk when it is done.' : ' and NexaDesk restarts by itself.'),
-        working: 'Downloading the update…',
-        installText: visible ? 'The installer opens now. When it finishes, keep "Run NexaDesk" ticked and press Finish.' : 'Installing… NexaDesk restarts by itself in a moment.',
-        run: async () => { const r = await window.nexa.nativeInstall({ url: nat.windows.url, sha256: nat.windows.sha256, version: nat.version }); if (!r || !r.ok) throw new Error((r && r.why) || 'install failed'); } };
+      if (nativePend) return;
+      if (forceN) { nativePend = true; return withCountdown('App update v' + nat.version, () => installNativeNow(nat)); }
+      if (autoUpd()) { nativePend = true; return whenIdle(() => installNativeNow(nat)); }
+      $('#nativeBox').textContent = 'App update v' + nat.version + ' is ready. Install it when you are not in a session.';
+      $('#installNative').hidden = false;
+      $('#installNative').onclick = () => { if (host || view) return toast('Finish the current session first'); installNativeNow(nat); };
     }
   }
-  if (nat && nat.android && window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'android') {   // Android app: Android itself asks for one tap
+  if (nat.android && window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'android') {
     let curA = ''; try { curA = (await CU().current()).native || ''; } catch (_) {}
-    if (!curA || cmpv(nat.version, curA) > 0) {
-      return { kind: 'apk', version: nat.version, from: curA, notes, auto: false, btn: 'Download & install',
-        intro: 'A new version is required. Tap the button, then open the downloaded file and tap Install.',
-        working: 'Downloading… when it finishes, open the file and tap Install.',
-        run: async () => { const a = document.createElement('a'); a.href = nat.android.url; a.target = '_blank'; a.rel = 'noopener'; a.click(); } };
-    }
+    const link = $('#apkLink');
+    if (!curA || cmpv(nat.version, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; link.hidden = false; }
+    else link.hidden = true;
   }
-  if (ok && cmpv(m.version, VER) > 0) {                                                                   // web layer only (UI + logic)
-    return { kind: 'web', version: m.version, from: VER, notes, auto: true, btn: 'Install now',
-      intro: 'A new version is required. It downloads and installs in a few seconds, then NexaDesk restarts.',
-      working: 'Downloading the update…',
-      run: async () => {
-        if (!pend || pend.version !== m.version) await stageUpdate(m);
-        updUI.status.textContent = 'Update installed ✓ Restarting NexaDesk…'; showProg({ phase: 'done', label: 'Installed ✓' });
-        await sleep(1200); applyPending();
-      } };
-  }
-  return null;
-};
-function forceUpdate(plan) {                        // never cut a live session for 10 minutes; then the pop-up appears anyway (30 s countdown)
-  if (updUI || updWait) return;
-  const t0 = Date.now();
-  const go = () => { if ((host || view) && Date.now() - t0 < 600000) return false; clearInterval(updWait); updWait = null; openUpdateDialog(plan); return true; };
-  if (go()) return;
-  updWait = setInterval(() => { if (!go()) updMsg('Update v' + plan.version + ' is required. It starts when your session ends.'); }, 1500);
+}
+function installNow() {
+  if (!pend) return toast('No update is ready');
+  if (host || view) return toast('Finish the current session first');
+  wantInstall = true;
+  if (inSettings()) return toast('The update installs when you leave Settings');
+  wantInstall = false; applyWhenIdle(true);
 }
 // checkOta(manual): user pressed "Check"   push: server announced a new release   neither: automatic check
 async function checkOta(manual, push) {
   if (otaBusy) return;
-  otaBusy = true; checkOta.last = Date.now();
+  otaBusy = true;
   try {
     const q = '?t=' + Date.now();
     const [rt, rs] = await Promise.all([fetch(otaBase() + '/update.json' + q, { cache: 'no-store' }), fetch(otaBase() + '/update.sig2' + q, { cache: 'no-store' })]);
@@ -810,12 +874,17 @@ async function checkOta(manual, push) {
     const text = await rt.text();
     if (!(await verifyManifest(text, await rs.text()))) throw new Error('signature');
     const m = JSON.parse(text);
+    if (m.native && m.native.windows && m.mirrors && MIRROR_PREFIX_RE.test(m.mirrors.app || '') && /github\.com/.test(m.mirrors.app)) m.native.windows.mirror = m.mirrors.app + 'NexaDesk-Setup-' + m.native.version + '.exe';
     adoptServer(m);
     const ok = /^\d+\.\d+\.\d+$/.test(m.version) && /^www-\d+\.\d+\.\d+\.zip$/.test(m.bundle || '') && /^[0-9a-f]{64}$/i.test(m.sha256 || '');
     ulog('server has v' + m.version + ', this device runs v' + VER + (m.force === true ? ' (forced)' : ''));
-    if (typeof m.notes === 'string' && m.notes) $('#notesBox').textContent = "What's new in v" + m.version + ': ' + m.notes.slice(0, 300);
-    const plan = await buildPlan(m, ok);
-    if (plan) forceUpdate(plan); else if (manual) toast('You are on the latest version (v' + VER + ')');
+    if (ok && cmpv(m.version, VER) > 0) {
+      if (!pend || pend.version !== m.version) await stageUpdate(m);
+      if (m.force === true) forceNow(m.version); else if (autoUpd()) applyWhenIdle(); else showReady(m.version);
+    } else if (manual && !m.native) toast('You are on the latest version (v' + VER + ')');
+    // the installed package (EXE / APK) is checked on every check: a page reload after a web update would otherwise cancel it forever
+    await handleNative(m, m.force === true);
+    if (manual && !(ok && cmpv(m.version, VER) > 0) && m.native && !nativePend && $('#installNative').hidden && $('#apkLink').hidden) toast('You are on the latest version (v' + VER + ')');
   } catch (e) {
     ulog('check failed: ' + (e && e.message || e));
     if (e.message === 'signature') {
@@ -826,10 +895,18 @@ async function checkOta(manual, push) {
   } finally { otaBusy = false; }
 }
 $('#chkUpd').onclick = () => checkOta(true);
+$('#installUpd').onclick = installNow;
+$('#autoUpd').checked = autoUpd();
+$('#autoUpd').onchange = e => {
+  S.set('autoUpdate', e.target.checked);
+  toast(e.target.checked ? 'Automatic updates: on' : 'Automatic updates: off - you install updates yourself');
+  if (e.target.checked) checkOta();
+};
 setInterval(() => checkOta(), 60000);
-window.addEventListener('focus', () => { if (Date.now() - (checkOta.last || 0) > 30000) checkOta(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - (checkOta.last || 0) > 30000) checkOta(); });
-setTimeout(() => checkOta(), 6000);
+window.addEventListener('focus', () => checkOta());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkOta(); });
+setTimeout(() => checkOta(), 1500);
 { const c = S.get('lastId', ''); if (c) $('#myId').textContent = fmtId(c); }   // show the last known ID instantly
+setInterval(() => { if (ws && ws.readyState === 1 && myId && !host && !view) send({ t: 'ice' }); }, 5 * 3600 * 1000);   // TURN credentials expire after 12 h
 renderLog(); connectWS();
 })();

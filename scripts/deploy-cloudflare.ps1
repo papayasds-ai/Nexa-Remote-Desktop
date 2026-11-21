@@ -1,11 +1,12 @@
 # Creates / repairs the NexaDesk server on Cloudflare Workers (free plan). Safe to run repeatedly.
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
+. "$PSScriptRoot\common.ps1"
 $cf = Join-Path $root 'cloudflare'
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Host 'Install Node.js 18+ first: https://nodejs.org' -ForegroundColor Red; exit 1 }
 Push-Location $cf
 try {
-  npm install --no-audit --no-fund | Out-Null
+  Install-Packages $cf
   $who = (cmd /c "npx wrangler whoami 2>&1") -join ' '
   if ($who -match 'not authenticated|You are not|Not logged') {
     Write-Host "`nA browser window will open to log in to Cloudflare (first time only)..." -ForegroundColor Cyan

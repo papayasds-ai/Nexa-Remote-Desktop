@@ -23,7 +23,7 @@ export default {
       if (!env.OTA_NOTIFY_TOKEN || !safeEq(got, 'Bearer ' + env.OTA_NOTIFY_TOKEN)) return new Response('forbidden', { status: 403 });
       return env.HUB.get(env.HUB.idFromName('hub')).fetch(new Request('https://hub/broadcast', { method: 'POST', body: (await req.text()).slice(0, 2000) }));
     }
-    if (url.pathname === '/health') return new Response(JSON.stringify({ ok: true, turn: !!(env.TURN_KEY_ID && env.TURN_API_TOKEN) }), { headers: { 'content-type': 'application/json' } });   // turn: is a relay configured?
+    if (url.pathname === '/health') return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('NexaDesk signaling server', { status: 200 });
     return env.HUB.get(env.HUB.idFromName('hub')).fetch(req);
   }
@@ -60,12 +60,7 @@ export class Hub {
         const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${id}/credentials/generate-ice-servers`, {
           method: 'POST', headers: { Authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify({ ttl: 43200 })
         });
-        if (r.ok) { const j = await r.json(); (j.iceServers || []).forEach(s => {
-          if (!s.username) return; list.push(s);
-          const have = [].concat(s.urls || []).join(' ');   // make sure TCP and TLS-443 relays are offered too (5G / CGNAT / office firewalls)
-          const extra = ['turn:turn.cloudflare.com:3478?transport=tcp', 'turns:turn.cloudflare.com:5349?transport=tcp', 'turns:turn.cloudflare.com:443?transport=tcp'].filter(u => !have.includes(u));
-          if (extra.length) list.push({ urls: extra, username: s.username, credential: s.credential });
-        }); }
+        if (r.ok) { const j = await r.json(); (j.iceServers || []).forEach(s => { if (s.username) list.push(s); }); }
       } catch (_) {}
     }
     return list;

@@ -2,7 +2,6 @@
 param([switch]$NoBump, [string]$ServerUrl = "")
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$ownLog = $false; try { New-Item -ItemType Directory -Force (Join-Path $root 'logs') | Out-Null; Start-Transcript -Path (Join-Path $root 'logs\build-windows.log') -Force | Out-Null; $ownLog = $true } catch { }   # full build output is saved to logs\build-windows.log
 . "$PSScriptRoot\common.ps1"
 Initialize-UpdateKeys $root | Out-Null
 foreach ($c in 'node', 'npm') { if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { throw "$c not found. Install Node.js 18+ LTS from https://nodejs.org" } }
@@ -21,13 +20,13 @@ Copy-Item (Join-Path $root 'app\www') (Join-Path $desk 'www') -Recurse
 $origin = ($ServerUrl -replace '^wss://', 'https://' -replace '^ws://', 'http://')
 $idx = Join-Path $desk 'www\index.html'; [IO.File]::WriteAllText($idx, [IO.File]::ReadAllText($idx).Replace('__OTA_ORIGIN__', $origin), (New-Object Text.UTF8Encoding $false))
 $prefix = if ($origin -match '^https://') { "$origin/" } else { '' }
-$relPrefix = (Get-ReleaseHost $root).Url.TrimEnd('/') + '/'
+$relFile = Join-Path $root 'release-host.txt'
+$relPrefix = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim().TrimEnd('/') + '/' } else { $g = Resolve-GitHubRepo $root -Create; if ($g) { "https://github.com/$g/releases/download/ota/" } else { '' } }
 [IO.File]::WriteAllText((Join-Path $desk 'build-config.json'), (@{ otaPrefix = $prefix; releasePrefix = $relPrefix } | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
 
 Push-Location $desk
 try {
-  npm install --no-audit --no-fund
-  if ($LASTEXITCODE) { throw 'npm install failed' }
+  Install-Packages $desk -Block runtime    # Electron itself ships inside the app, so its advisories block; build tools (electron-builder) never ship
   npm version $ver --no-git-tag-version --allow-same-version | Out-Null
   Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
   $pfx = Join-Path $root 'signing\codesign.pfx'
@@ -67,4 +66,4 @@ try {
     }
   } catch { Write-Host "  Could not create the portable ZIP: $($_.Exception.Message)" -ForegroundColor Yellow }
   Write-Host "`nDone (v$ver). Windows builds are in: $out" -ForegroundColor Green
-} finally { Pop-Location; if ($ownLog) { try { Stop-Transcript | Out-Null } catch { } } }
+} finally { Pop-Location }

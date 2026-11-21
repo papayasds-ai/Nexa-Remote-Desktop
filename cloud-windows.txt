@@ -1,2 +1,0 @@
-While this file exists, START-HERE option 1 builds the big Windows installers (Setup + Portable) on GitHub instead of on this PC,
-so nothing larger than the 4 MB APK is uploaded from here. Delete this file to build and upload everything on this PC again.

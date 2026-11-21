@@ -125,7 +125,7 @@ $scheme = if ($AllowInsecure) { 'http' } else { 'https' }
 
 Push-Location $app
 try {
-  npm install --no-audit --no-fund; if ($LASTEXITCODE) { throw 'npm install failed' }
+  Install-Packages $app -Block shipped
   if (-not (Test-Path 'android')) { npx cap add android; if ($LASTEXITCODE) { throw 'cap add android failed' } }
   npx cap sync android; if ($LASTEXITCODE) { throw 'cap sync failed' }
 
@@ -143,7 +143,8 @@ try {
   if (-not $unsigned) { throw 'Release APK not found' }
 
   # ---- signing (keystore is generated once; BACK IT UP - you need it for every future APK update) ----
-  $kr = Resolve-Keystore $root; $ks = $kr.Ks; $pwFile = $kr.Pw
+  $signDir = Join-Path $root 'signing'; New-Item -ItemType Directory -Force $signDir | Out-Null
+  $ks = Join-Path $signDir 'nexadesk.jks'; $pwFile = Join-Path $signDir 'keystore-password.txt'
   if (-not (Test-Path $ks)) {
     $bytes = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $kpw = [Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', 'x'

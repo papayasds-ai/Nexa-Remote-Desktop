@@ -1,0 +1,7 @@
+{
+  "name": "node-domexception",
+  "version": "1.0.0",
+  "description": "Local replacement for the deprecated node-domexception package: Node 18+ has DOMException built in.",
+  "main": "index.js",
+  "license": "MIT"
+}

@@ -5,7 +5,7 @@ $srv = Join-Path (Split-Path $PSScriptRoot -Parent) 'server'
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node.js 18+ is required: https://nodejs.org' }
 Push-Location $srv
 try {
-  npm install --omit=dev --no-audit --no-fund
+  npm install --omit=dev --no-fund
   if ($LASTEXITCODE) { throw 'npm install failed' }
   $cfg = @{ port = $Port; stun = @('stun:stun.l.google.com:19302') }
   if ($TurnHost -and $TurnSecret) {
