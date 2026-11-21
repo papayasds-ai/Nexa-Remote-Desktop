@@ -11,6 +11,11 @@ const slog = m => { try { const f = path.join(app.getPath('userData'), 'startup.
 // "installed" = set up by the Setup (an uninstaller sits next to the exe). Portable builds (EXE or ZIP) never get installer updates.
 const isInstalled = () => { if (process.env.PORTABLE_EXECUTABLE_FILE) return false; try { return fs.readdirSync(path.dirname(process.execPath)).some(n => /^Uninstall .*\.exe$/i.test(n)); } catch (_) { return false; } };
 slog('start v' + app.getVersion() + (isInstalled() ? '' : ' (portable/unpacked)') + ' args=' + process.argv.slice(1).join(' '));
+// Capture compatibility: when Windows refuses the screen capture ("Could not start video source", seen when running as administrator), the page asks for
+// a restart in a safer capture mode. Level 1 = older desktop capture API, level 2 = also without GPU acceleration. The level is kept in a small file.
+const compatFile = () => path.join(app.getPath('userData'), 'capture-compat');
+const compatLevel = () => { try { return Math.min(2, Math.max(0, parseInt(fs.readFileSync(compatFile(), 'utf8'), 10) || 0)); } catch (_) { return 0; } };
+{ const lv = compatLevel(); if (lv >= 1) { app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcDesktopCapturer,AllowWgcWindowCapturer'); } if (lv >= 2) app.disableHardwareAcceleration(); slog('capture compatibility level ' + lv); }
 if (!app.requestSingleInstanceLock()) { slog('another NexaDesk is already running (it holds the lock): this one quits'); app.quit(); process.exit(0); }
 
 let win = null, helper = null, fellBack = false, tray = null, keepTray = false, quitting = false;
@@ -188,6 +193,14 @@ const ADMIN_TASK = 'NexaDesk Autostart';
 const elevatedP = process.platform === 'win32' ? new Promise(ok => execFile('fltmc.exe', [], { windowsHide: true }, err => ok(!err))) : Promise.resolve(false);
 elevatedP.then(v => slog('administrator rights: ' + v));
 const runOk = (file, args, opt) => new Promise(ok => execFile(file, args, { windowsHide: true, ...(opt || {}) }, err => ok(!err)));
+ipcMain.handle('nx-capture-compat', e => {
+  if (!fromOurWindow(e) || process.platform !== 'win32') return { ok: false };
+  const lv = compatLevel(); if (lv >= 2) return { ok: false, why: 'already at the safest capture mode' };
+  try { fs.writeFileSync(compatFile(), String(lv + 1)); } catch (_) { return { ok: false }; }
+  slog('capture failed: restarting in compatibility level ' + (lv + 1));
+  app.releaseSingleInstanceLock(); app.relaunch({ args: process.argv.slice(1).filter(a => a !== '--updated') }); setTimeout(() => { quitting = true; app.quit(); }, 400);
+  return { ok: true };
+});
 ipcMain.on('nx-log', (e, m) => { if (fromOurWindow(e)) slog('ui: ' + m); });
 ipcMain.handle('nx-admin', async (e, o) => {
   if (!fromOurWindow(e) || process.platform !== 'win32') return { ok: false };

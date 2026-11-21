@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('nexa', {
   canHost: process.platform === 'win32',   // input injection helper is Windows-only; other OSes are viewer-only
   input: cmd => ipcRenderer.send('nx-input', String(cmd)),
   focus: () => ipcRenderer.send('nx-focus'),
+  captureCompat: () => ipcRenderer.invoke('nx-capture-compat'),
   log: m => ipcRenderer.send('nx-log', String(m).slice(0, 300)),
   otaInstall: o => ipcRenderer.invoke('nx-ota-install', o),
   otaApply: () => ipcRenderer.send('nx-ota-apply'),
