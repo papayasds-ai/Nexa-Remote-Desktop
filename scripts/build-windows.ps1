@@ -65,5 +65,6 @@ try {
       Write-Host "  NexaDesk-Portable-$ver.zip  (fast portable: extract anywhere, run NexaDesk.exe)" -ForegroundColor DarkGray
     }
   } catch { Write-Host "  Could not create the portable ZIP: $($_.Exception.Message)" -ForegroundColor Yellow }
+  Get-NativeFingerprint $root | Set-Content (Join-Path $root 'native-build.hash') -Encoding ASCII   # remembers what this EXE contains
   Write-Host "`nDone (v$ver). Windows builds are in: $out" -ForegroundColor Green
 } finally { Pop-Location }

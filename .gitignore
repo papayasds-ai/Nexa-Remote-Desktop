@@ -17,3 +17,4 @@ build/
 notify-token.txt
 desktop/build-config.json
 *.before-force
+native-build.hash

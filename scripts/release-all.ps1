@@ -1,5 +1,5 @@
 # One-click: make sure the server exists, bump version, build EXE + APK, publish OTA to GitHub, ping all devices.
-param([switch]$AllowInsecure)
+param([switch]$AllowInsecure, [switch]$Force)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\common.ps1"   # also refreshes PATH, so freshly installed tools are found
@@ -23,5 +23,5 @@ $u = (Get-Content $urlFile -Raw).Trim()
 try {
   if ($AllowInsecure) { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump -AllowInsecure } else { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump }
 } catch { Write-Host "`nAndroid build skipped: $($_.Exception.Message)" -ForegroundColor Yellow }
-& "$PSScriptRoot\publish-ota.ps1" -NoBump
+& "$PSScriptRoot\publish-ota.ps1" -NoBump -Force:$Force
 Write-Host "`nAll done. Installers are in output\" -ForegroundColor Green

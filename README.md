@@ -90,7 +90,8 @@ system privileges. That is a deliberate security decision, not something the app
 | Command | What it does |
 |---|---|
 | `release` | full release: server + EXE + APK + GitHub + instant update |
-| `update [-Force] [-NoBump] [-WithPortable] [-RetryUpload] [-RecoveryKey f] [-AppKey id]` | quick web-layer update |
+| `update [-Force] [-RetryUpload] [-RecoveryKey f] [-AppKey id]` | automatic: quick web-layer update when only `app\www` changed, FULL release when the app package (main.js, preload, helper, icons, build settings) changed |
+| `quick [-Force] [-NoBump] [-WithPortable]` | always the quick web-layer update |
 | `force` | quick update every device must install |
 | `windows` / `android` | build the EXE / APK only |
 | `server` | create or repair the Cloudflare server |

@@ -29,7 +29,7 @@ echo ==============================================
 echo   NexaDesk - secure remote access builder
 echo ==============================================
 echo   1) Full release    server + EXE + APK + GitHub + instant update
-echo   2) Quick update    UI/logic only, devices update instantly
+echo   2) Update          quick if only the UI changed, full build if the app changed
 echo   3) Security check  installs packages and applies the safe fixes
 echo   0) Exit
 echo.
@@ -51,8 +51,9 @@ goto menu
 
 :dispatch
 if /i "%CMD%"=="release"      call :ps release-all.ps1      & goto :eof
-if /i "%CMD%"=="update"       call :ps publish-ota.ps1      & goto :eof
-if /i "%CMD%"=="force"        set "ARGS= -Force%ARGS%" & call :ps publish-ota.ps1 & goto :eof
+if /i "%CMD%"=="update"       call :ps update-auto.ps1      & goto :eof
+if /i "%CMD%"=="quick"        call :ps publish-ota.ps1      & goto :eof
+if /i "%CMD%"=="force"        set "ARGS= -Force%ARGS%" & call :ps update-auto.ps1 & goto :eof
 if /i "%CMD%"=="windows"      call :ps build-windows.ps1    & goto :eof
 if /i "%CMD%"=="android"      call :ps build-android.ps1    & goto :eof
 if /i "%CMD%"=="server"       call :ps deploy-cloudflare.ps1 & goto :eof
@@ -70,7 +71,7 @@ echo Unknown command: %CMD%
 :usage
 echo.
 echo Usage: NexaDesk.bat ^<command^> [flags]     (no command = menu)
-echo   release / update / force / windows / android / server / security / check / diagnose / auto-on / auto-off / migrate / setup
+echo   release / update / quick / force / windows / android / server / security / check / diagnose / auto-on / auto-off / migrate / setup
 echo   examples:  NexaDesk.bat update -Force      NexaDesk.bat security -Fix      NexaDesk.bat migrate -From "C:\old\NexaDesk"
 goto :eof
 
