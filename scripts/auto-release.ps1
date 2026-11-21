@@ -13,7 +13,9 @@ function Fingerprint([string[]]$paths) {
   return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))))).Replace('-', '').ToLower()
 }
 $web = @(Get-ChildItem (Join-Path $root 'app\www') -File -Recurse | Where-Object { $_.Name -ne 'update-keys.js' } | ForEach-Object FullName)
-$webNow = Fingerprint $web; $nativeNow = Get-NativeFingerprint $root
+$native = @(Get-ChildItem (Join-Path $root 'desktop') -File | Where-Object { $_.Extension -in '.js', '.ps1', '.json', '.ico', '.png' } | ForEach-Object FullName) +
+          @((Join-Path $root 'android-app\package.json'))
+$webNow = Fingerprint $web; $nativeNow = Fingerprint $native
 $webStamp = Join-Path $build 'auto-release.hash'; $nativeStamp = Join-Path $build 'auto-native.hash'
 if (-not (Test-Path $webStamp) -or -not (Test-Path $nativeStamp)) {
   $webNow | Set-Content $webStamp -Encoding ASCII; $nativeNow | Set-Content $nativeStamp -Encoding ASCII

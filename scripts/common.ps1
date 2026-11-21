@@ -93,16 +93,4 @@ function Sync-Path {
   if (-not $env:JAVA_HOME -and (Get-Command java -ErrorAction SilentlyContinue)) { $j = (Get-Command java).Source; if ($j -match '^(.*)\\bin\\java(\.exe)?$') { $env:JAVA_HOME = $Matches[1] } }
   } catch { }   # never let this convenience break a script
 }
-# Fingerprint of the files that end up INSIDE the installed app package (desktop\main.js, preload, input helper, icons, build settings, Android package.json).
-# A quick update cannot deliver these; build-windows.ps1 stamps it after every successful build and "NexaDesk.bat update" compares it.
-function Get-NativeFingerprint([string]$root) {
-  $files = @(Get-ChildItem (Join-Path $root 'desktop') -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.js', '.ps1', '.json', '.ico', '.png' -and $_.Name -notin 'package-lock.json', 'build-config.json', 'package.json' } | ForEach-Object FullName)
-  $files += @((Join-Path $root 'desktop\package.json'), (Join-Path $root 'android-app\package.json'))
-  $lines = foreach ($f in ($files | Where-Object { Test-Path $_ } | Sort-Object)) {
-    if ($f -like '*package.json') { $t = [IO.File]::ReadAllText($f) -replace '"version"\s*:\s*"[^"]*"', '"version":""'; $b = [Text.Encoding]::UTF8.GetBytes($t); $h = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') }   # the version number changes on every build: ignore it
-    else { $h = (Get-FileHash $f -Algorithm SHA256).Hash }
-    $f.Substring($root.Length) + ' ' + $h
-  }
-  return ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))))).Replace('-', '').ToLower()
-}
 Sync-Path

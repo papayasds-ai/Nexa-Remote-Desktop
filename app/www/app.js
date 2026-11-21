@@ -37,7 +37,7 @@ const canHost = !!(window.nexa && window.nexa.canHost);
 let deviceKey = S.get('devkey'); if (!deviceKey) { deviceKey = rnd(32); S.set('devkey', deviceKey); }
 let myId = null, iceServers = [], ws = null, retry = null, icePing = null;
 let pw = null; const invites = new Map();       // code -> expiry
-const pendingAuth = new Map(), fails = new Map();
+const pendingAuth = new Map(), fails = new Map(), gfail = { n: 0, t0: 0, until: 0 };
 let host = null, view = null;
 let closing = false;                              // the page is unloading (app closing or an update reload): no side effects such as locking the PC
 
@@ -58,12 +58,7 @@ async function loadPermPw() {
     const old = S.get('permpw', '');                                  // migrate an older plain-text copy
     if (old && !permPwCache) { permPwCache = old; await sec.set(old); }
     if (old) localStorage.removeItem('nx_permpw');
-  } else {                                                           // Android / browser: AES-GCM vault (non-extractable key), not plain localStorage
-    const v = await Vault.load(); permPwCache = v._perm || '';
-    const old = S.get('permpw', '');
-    if (old && !permPwCache) { permPwCache = old; v._perm = old; await Vault.save(v); vaultData = { ...vaultData, ...v }; }
-    if (old) localStorage.removeItem('nx_permpw');
-  }
+  } else permPwCache = S.get('permpw', '') || '';
 }
 function newPw() {
   const perm = permPwCache;
@@ -108,6 +103,9 @@ async function onMsg(m) {
 // ---------- HOST side ----------
 async function onReq(from) {
   if (!canHost) return send({ t: 'deny', to: from, reason: 'This device can only control others (viewer mode).' });
+  if (gfail.until > Date.now()) return send({ t: 'deny', to: from, reason: 'Too many failed attempts. Try again later.' });
+  for (const [k, v] of pendingAuth) if (Date.now() - v.ts > 30000) pendingAuth.delete(k);
+  if (pendingAuth.size >= 20) return send({ t: 'deny', to: from, reason: 'Device is busy. Try again in a moment.' });
   const f = fails.get(from); if (f && f.until > Date.now()) return send({ t: 'deny', to: from, reason: 'Too many failed attempts. Try again later.' });
   if (host) return send({ t: 'deny', to: from, reason: 'Device is busy with another session.' });
   const nonce = rnd(16); pendingAuth.set(from, { nonce, ts: Date.now() });
@@ -119,10 +117,12 @@ async function onAuth(from, mac) {
   if (!p || Date.now() - p.ts > 30000 || typeof mac !== 'string') return;
   const msg = 'auth:' + p.nonce + ':' + from + ':' + myId;
   let secret = null, kind = null;
-  if (await hmacOk(pw, msg, mac)) { secret = pw; kind = 'password'; }
+  if (pw && await hmacOk(pw, msg, mac)) { secret = pw; kind = 'password'; }
   else for (const c of validInvites()) if (await hmacOk(c, msg, mac)) { secret = c; kind = 'invite'; invites.delete(c); $('#inviteCode').textContent = '—'; break; }
   if (!secret) {
     const f = fails.get(from) || { n: 0, until: 0 }; f.n++; if (f.n >= 5) { f.until = Date.now() + 10 * 60000; f.n = 0; } fails.set(from, f);
+    if (Date.now() - gfail.t0 > 10 * 60000) { gfail.n = 0; gfail.t0 = Date.now(); }
+    if (++gfail.n >= 25) { gfail.until = Date.now() + 5 * 60000; gfail.n = 0; }   // many different IDs guessing: pause everyone
     log('host', from, 'AUTH FAILED'); return send({ t: 'deny', to: from, reason: 'Authentication failed.' });
   }
   fails.delete(from);
@@ -130,7 +130,7 @@ async function onAuth(from, mac) {
   if (kind === 'password' && S.get('unattended', false)) perm = { control: S.get('defControl', true), clip: S.get('defClip', true), files: S.get('defFiles', true) };
   else perm = await askConsent(from);
   if (!perm) { log('host', from, 'denied by user'); return send({ t: 'deny', to: from, reason: 'The user declined the request.' }); }
-  try { await startHost(from, secret, perm); } catch (e) { console.error(e); const why = (e && (e.name || e.message)) ? ' (' + (e.name || e.message) + ')' : ''; toast('Could not start screen sharing' + why); log('host', from, 'screen sharing failed' + why); if (window.nexa && window.nexa.log) window.nexa.log('startHost failed: ' + (e && e.stack || e)); send({ t: 'deny', to: from, reason: 'Host could not capture the screen.' }); endHost(false); }
+  try { await startHost(from, secret, perm); } catch (e) { console.error(e); toast('Could not start screen sharing'); send({ t: 'deny', to: from, reason: 'Host could not capture the screen.' }); endHost(false); }
 }
 function askConsent(from) {
   return new Promise(res => {
@@ -142,20 +142,10 @@ function askConsent(from) {
     $('#mdNo').onclick = () => done(null);
   });
 }
-async function grabScreen(wantSound) {            // tries with sound, then picture only, then plain; a few rounds (the capturer can be briefly busy)
-  const tries = [{ video: { frameRate: 30 }, audio: !!wantSound }, { video: { frameRate: 30 }, audio: false }, { video: true, audio: false }];
-  let last;
-  for (let round = 0; round < 3; round++) {
-    for (const c of tries) {
-      try { return await navigator.mediaDevices.getDisplayMedia(c); }
-      catch (e) { last = e; if (window.nexa && window.nexa.log) window.nexa.log('getDisplayMedia failed: ' + (e && e.name) + ' ' + (e && e.message)); }
-    }
-    await new Promise(r => setTimeout(r, 500));
-  }
-  throw last;
-}
 async function startHost(from, secret, perm) {
-  const stream = await grabScreen(S.get('shareAudio', false));
+  const wantSound = S.get('shareAudio', false); let stream;
+  try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: wantSound }); }
+  catch (e) { if (!wantSound) throw e; stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false }); }   // no sound capture available: share the picture only
   const pc = new RTCPeerConnection({ iceServers: iceList() });
   host = { peer: from, pc, stream, perm, secret, q: [], remoteSet: false, t0: Date.now() };
   stream.getTracks().forEach(t => { if (t.kind === 'video') { try { t.contentHint = 'detail'; } catch (_) {} } pc.addTrack(t, stream); });
@@ -303,7 +293,10 @@ async function onChal(from, nonce) {
   pc.onconnectionstatechange = async () => {
     if (!view) return;
     if (pc.connectionState === 'connected') { view.st = 'live'; showSession(); }
-    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) { if (pc.connectionState !== 'disconnected') { toast('Connection lost'); endView(false); } }
+    const cs = pc.connectionState;
+    if (cs === 'connected') { clearTimeout(view.dcT); netNote(false); }
+    if (cs === 'disconnected') { netNote(true); clearTimeout(view.dcT); view.dcT = setTimeout(() => { if (view && view.pc === pc && pc.connectionState !== 'connected') { toast('Connection lost'); endView(false); } }, 30000); }
+    if (cs === 'failed' || cs === 'closed') { toast('Connection lost'); endView(false); }
   };
   send({ t: 'auth', to: from, mac: await hmacHex(view.secret, 'auth:' + nonce + ':' + myId + ':' + from) });
 }
@@ -340,7 +333,7 @@ async function showSession() {
 }
 function endView(notify) {
   if (!view) return; tpReset(); const v = view; view = null;
-  clearTimeout(v.timer); clearInterval(v.statTimer); try { v.wake && v.wake.release(); } catch (_) {}
+  clearTimeout(v.timer); clearTimeout(v.dcT); clearInterval(v.statTimer); zoomReset(); netNote(false); $('#session').classList.remove('immersive'); try { v.wake && v.wake.release(); } catch (_) {}
   try { if (v.fdc && v.fdc.readyState === 'open') v.fdc.send(JSON.stringify({ k: 'fa' })); } catch (_) {}
   $('#btnSound').hidden = true; $('#vid').muted = true; $('#btnSound').textContent = 'Sound off'; $('#xferInfo').textContent = '';
   if (notify) send({ t: 'bye', to: v.to });
@@ -368,10 +361,31 @@ const dcs = o => { if (view && view.dc && view.dc.readyState === 'open') view.dc
 function norm(e) {
   const r = vid.getBoundingClientRect(), vw = vid.videoWidth, vh = vid.videoHeight; if (!vw) return null;
   let w, h, ox, oy;
-  if (vid.classList.contains('actual')) { w = vw; h = vh; ox = (r.width - w) / 2; oy = (r.height - h) / 2; }
+  if (vid.classList.contains('actual')) { w = vw * Z.s; h = vh * Z.s; ox = (r.width - w) / 2; oy = (r.height - h) / 2; }
   else { const s = Math.min(r.width / vw, r.height / vh); w = vw * s; h = vh * s; ox = (r.width - w) / 2; oy = (r.height - h) / 2; }
   return { x: Math.min(1, Math.max(0, (e.clientX - r.left - ox) / w)), y: Math.min(1, Math.max(0, (e.clientY - r.top - oy) / h)) };
 }
+
+// ----- zoom (pinch with two fingers, Ctrl+wheel / trackpad pinch on a computer, 100% button): the remote picture is scaled and panned -----
+const Z = { s: 1, x: 0, y: 0 };
+function zoomApply() {
+  const st = vid.parentElement, W = vid.offsetWidth, H = vid.offsetHeight;
+  Z.s = Math.min(6, Math.max(1, Z.s));
+  const mx = (Z.s - 1) * W / 2, my = (Z.s - 1) * H / 2;
+  Z.x = Math.min(mx, Math.max(-mx, Z.x)); Z.y = Math.min(my, Math.max(-my, Z.y));
+  if (Z.s === 1) { Z.x = Z.y = 0; vid.style.transform = ''; st.style.overflow = ''; }
+  else { vid.style.transformOrigin = 'center'; vid.style.transform = `translate(${Z.x}px, ${Z.y}px) scale(${Z.s})`; st.style.overflow = 'hidden'; }
+  const b = $('#btnZoom'); if (b) b.textContent = Z.s === 1 ? 'Zoom' : Math.round(Z.s * 100) + '%';
+}
+// factor around the screen point (cx, cy); (dx, dy) = movement of the pinch centre = pan
+function zoomBy(f, cx, cy, dx, dy) {
+  const r = vid.parentElement.getBoundingClientRect(), ox = r.left + r.width / 2, oy = r.top + r.height / 2;
+  const s0 = Z.s, s1 = Math.min(6, Math.max(1, s0 * f)), k = s1 / s0;
+  Z.x = (cx - ox) - ((cx - ox) - Z.x) * k + (dx || 0); Z.y = (cy - oy) - ((cy - oy) - Z.y) * k + (dy || 0); Z.s = s1;
+  zoomApply();
+}
+function zoomReset() { Z.s = 1; Z.x = Z.y = 0; try { zoomApply(); } catch (_) {} }
+function netNote(on) { const n = $('#netNote'); if (n) n.hidden = !on; }
 let moveQ = null;
 const btnOf = e => (e.button === 2 ? 'r' : e.button === 1 ? 'm' : 'l');
 const isTouchPtr = e => e.pointerType === 'touch' || e.pointerType === 'pen';
@@ -389,7 +403,7 @@ sess.addEventListener('pointermove', e => { if (isTouchPtr(e)) tpMove(e); });
 sess.addEventListener('pointerup', e => { if (isTouchPtr(e)) tpUp(e); });
 sess.addEventListener('pointercancel', e => { if (isTouchPtr(e)) tpUp(e); });
 vid.addEventListener('contextmenu', e => e.preventDefault());
-vid.addEventListener('wheel', e => { dcs({ k: 'w', v: -e.deltaY }); e.preventDefault(); }, { passive: false });
+vid.addEventListener('wheel', e => { if (e.ctrlKey) zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY, 0, 0); else dcs({ k: 'w', v: -e.deltaY }); e.preventDefault(); }, { passive: false });
 
 // ----- touch / pen on a phone or tablet: trackpad style, the cursor never jumps to the finger -----
 //   drag            = move cursor (relative to finger movement)
@@ -408,12 +422,12 @@ function tpSend(dx, dy) {
   tp.accX -= ix; tp.accY -= iy;
   dcs({ k: 'r', dx: ix, dy: iy });
 }
-const clickBtn = b => { dcs({ k: 'd', b }); dcs({ k: 'u', b }); };
+const clickBtn = b => { dcs({ k: 'd', b }); dcs({ k: 'u', b }); try { navigator.vibrate && navigator.vibrate(b === 'r' ? 25 : 12); } catch (_) {} };
 function tpDown(e) {
   const now = performance.now();
   if (tp.ptrs.size === 0) { tp.maxN = 0; tp.moved = false; tp.gesture = 'point'; }
   tp.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: now, moved: false });
-  tp.maxN = Math.max(tp.maxN, tp.ptrs.size);
+  tp.maxN = Math.max(tp.maxN, tp.ptrs.size); tp.pinch = false; tp.d0 = 0;
   clearTimeout(tp.longT);
   if (tp.ptrs.size === 1) {
     if (now - tp.lastTapEnd < 300 && !tp.hold) { tp.dragging = true; dcs({ k: 'd', b: 'l' }); }   // second tap = press and drag
@@ -428,7 +442,13 @@ function tpMove(e) {
   const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
   if (!p.moved && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 10) { p.moved = true; tp.moved = true; clearTimeout(tp.longT); }
   if (tp.gesture === 'point' && tp.ptrs.size === 1) tpSend(dx * sensOf(), dy * sensOf());
-  else if (tp.gesture === 'two') { tp.accW += dy * 1.5; const w = Math.trunc(tp.accW); if (w) { tp.accW -= w; dcs({ k: 'w', v: w }); } }
+  else if (tp.gesture === 'two' && tp.ptrs.size === 2) {
+    const [p1, p2] = [...tp.ptrs.values()], d = Math.hypot(p1.x - p2.x, p1.y - p2.y), cx = (p1.x + p2.x) / 2, cy = (p1.y + p2.y) / 2;
+    if (!tp.d0) { tp.d0 = d; tp.pd = d; tp.pcx = cx; tp.pcy = cy; }
+    if (!tp.pinch && (Math.abs(d - tp.d0) > 28 || (Z.s > 1 && Math.hypot(cx - tp.pcx, cy - tp.pcy) > 28 && Math.abs(d - tp.d0) > 8))) { tp.pinch = true; tp.moved = true; tp.accW = 0; }
+    if (tp.pinch) { zoomBy(d / tp.pd, cx, cy, cx - tp.pcx, cy - tp.pcy); tp.pd = d; tp.pcx = cx; tp.pcy = cy; return; }
+    tp.accW += dy * 1.5; const w = Math.trunc(tp.accW); if (w) { tp.accW -= w; dcs({ k: 'w', v: w }); } }
+  else if (tp.gesture === 'two' && !tp.pinch) { tp.accW += dy * 1.5; const w = Math.trunc(tp.accW); if (w) { tp.accW -= w; dcs({ k: 'w', v: w }); } }
 }
 function tpUp(e) {
   const p = tp.ptrs.get(e.pointerId); if (!p) return;
@@ -452,12 +472,14 @@ function tpReset() {
 $('#tpLeft').onclick = () => clickBtn('l');
 $('#tpRight').onclick = () => clickBtn('r');
 // keyboard shortcuts: Windows does not let any normal program send Ctrl+Alt+Del (see README), the others work
-const COMBOS = { 'ctrl-c': [17, 67], 'ctrl-v': [17, 86], 'ctrl-x': [17, 88], 'ctrl-z': [17, 90], 'ctrl-a': [17, 65], 'win-shift-s': [91, 16, 83], 'ctrl-shift-esc': [17, 16, 27], 'alt-tab': [18, 9], 'win': [91], 'win-l': [91, 76], 'win-d': [91, 68], 'alt-f4': [18, 115], 'esc': [27], 'printscreen': [44] };
+const COMBOS = { 'ctrl-c': [17, 67], 'ctrl-v': [17, 86], 'ctrl-x': [17, 88], 'ctrl-z': [17, 90], 'ctrl-a': [17, 65], 'win-shift-s': [91, 16, 83], 'ctrl-shift-esc': [17, 16, 27], 'alt-tab': [18, 9], 'win': [91], 'win-l': [91, 76], 'win-d': [91, 68], 'alt-f4': [18, 115], 'esc': [27], 'printscreen': [44], 'ctrl-s': [17, 83], 'ctrl-f': [17, 70], 'ctrl-w': [17, 87], 'ctrl-t': [17, 84], 'ctrl-y': [17, 89], 'win-r': [91, 82], 'win-e': [91, 69], 'f5': [116], 'f11': [122], 'enter': [13], 'tab': [9] };
+for (let i = 1; i <= 12; i++) COMBOS['f' + i] = [111 + i];
 function sendCombo(name) {
   const keys = COMBOS[name]; if (!keys) return;
   keys.forEach(vk => dcs({ k: 'kd', vk, ext: EXT.has(vk) }));
   [...keys].reverse().forEach(vk => dcs({ k: 'ku', vk, ext: EXT.has(vk) }));
 }
+{ const fb = $('#fKeys'); for (let i = 1; i <= 12; i++) { const b = document.createElement('button'); b.textContent = 'F' + i; b.dataset.combo = 'f' + i; fb.appendChild(b); } }
 document.querySelectorAll('#keysBar button').forEach(b => b.onclick = () => sendCombo(b.dataset.combo));
 $('#tpKeys').onclick = () => { $('#keysBar').hidden = !$('#keysBar').hidden; };
 const QUICK = { 'ctrl-c': 'Copy', 'ctrl-v': 'Paste', 'ctrl-x': 'Cut', 'ctrl-z': 'Undo', 'ctrl-a': 'Select all', 'win-shift-s': 'Snipping', 'ctrl-shift-esc': 'Task Manager', 'alt-tab': 'Alt+Tab', 'win-l': 'Lock PC', 'printscreen': 'Print Screen' };
@@ -528,7 +550,16 @@ async function sendFile(f) {
 }
 $('#btnFile').onclick = () => { $('#fileIn').value = ''; $('#fileIn').click(); };
 $('#fileIn').onchange = async e => { for (const f of [...e.target.files]) { if (!view) break; await sendFile(f); } e.target.value = ''; };
-$('#btnFit').onclick = () => vid.classList.toggle('actual');
+$('#btnFit').onclick = () => { zoomReset(); vid.classList.toggle('actual'); };
+$('#btnZoom').onclick = () => { if (Z.s === 1) { const r = vid.parentElement.getBoundingClientRect(); zoomBy(2, r.left + r.width / 2, r.top + r.height / 2, 0, 0); } else zoomReset(); };
+$('#btnShot').onclick = () => {
+  try {
+    if (!vid.videoWidth) return toast('No picture yet');
+    const c = document.createElement('canvas'); c.width = vid.videoWidth; c.height = vid.videoHeight; c.getContext('2d').drawImage(vid, 0, 0);
+    c.toBlob(b => { if (!b) return toast('Screenshot failed'); const u = URL.createObjectURL(b), l = document.createElement('a'); l.href = u; l.download = 'NexaDesk-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.png'; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); toast('Screenshot saved'); }, 'image/png');
+  } catch (_) { toast('Screenshot failed'); }
+};
+$('#fab').onclick = () => $('#session').classList.toggle('immersive');
 $('#btnFs').onclick = () => { document.fullscreenElement ? document.exitFullscreen() : $('#session').requestFullscreen().catch(() => {}); };
 $('#btnEnd').onclick = () => endView(true);
 
@@ -683,7 +714,7 @@ $('#savePerm').onclick = async () => {
   const v = $('#permPw').value; if (v.length < 12) return toast('Use at least 12 characters');
   const sec = window.nexa && window.nexa.secret && window.nexa.secret.available ? window.nexa.secret : null;
   if (sec) { if (!(await sec.set(v))) return toast('Could not store the password securely'); localStorage.removeItem('nx_permpw'); }
-  else { vaultData = await Vault.load(); vaultData._perm = v; if (!(await Vault.save(vaultData))) return toast('Could not store the password securely'); localStorage.removeItem('nx_permpw'); }
+  else S.set('permpw', v);
   permPwCache = v; $('#permPw').value = ''; toast('Saved'); if (S.get('unattended', false)) newPw();
 };
 loadPermPw().then(newPw);

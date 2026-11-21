@@ -11,21 +11,16 @@ const slog = m => { try { const f = path.join(app.getPath('userData'), 'startup.
 // "installed" = set up by the Setup (an uninstaller sits next to the exe). Portable builds (EXE or ZIP) never get installer updates.
 const isInstalled = () => { if (process.env.PORTABLE_EXECUTABLE_FILE) return false; try { return fs.readdirSync(path.dirname(process.execPath)).some(n => /^Uninstall .*\.exe$/i.test(n)); } catch (_) { return false; } };
 slog('start v' + app.getVersion() + (isInstalled() ? '' : ' (portable/unpacked)') + ' args=' + process.argv.slice(1).join(' '));
-// When running as administrator, fall back from Windows Graphics Capture to the older screen capturer (more reliable elevated), and record GPU/child crashes
-let elevatedNow = false;
-if (process.platform === 'win32') { try { require('child_process').execFileSync('fltmc.exe', [], { stdio: 'ignore', windowsHide: true, timeout: 3000 }); elevatedNow = true; } catch (_) {} }
-if (elevatedNow) app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcDesktopCapturer');
-app.on('child-process-gone', (_e, d) => slog('child process gone: ' + (d && d.type) + ' ' + (d && d.reason)));
-if (!app.requestSingleInstanceLock()) { slog('another NexaDesk is already running (it holds the lock): this one quits'); app.quit(); }
+if (!app.requestSingleInstanceLock()) { slog('another NexaDesk is already running (it holds the lock): this one quits'); app.quit(); process.exit(0); }
 
 let win = null, helper = null, fellBack = false, tray = null, keepTray = false, quitting = false;
-const RELEASE_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).releasePrefix; return /^https:\/\/[a-z0-9.-]+\/$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
+const RELEASE_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).releasePrefix; return /^https:\/\/[a-z0-9.-]+\/([\w.-]+\/)*$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
 // Backup download locations (GitHub copies of the same files). They are only used when they match these exact shapes, and every
 // download must still match the sha256 from the signed update.json.
 const MIRROR_WEB_RE = /^https:\/\/raw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+\/HEAD\/ota\/www-\d+\.\d+\.\d+\.zip$/;
 const MIRROR_APP_RE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/ota\/NexaDesk-Setup-\d+\.\d+\.\d+\.exe$/;
 // Download with live progress (sent to the window), a stall timeout, and a list of URLs tried in order. Returns a Buffer whose sha256 matches, or null.
-async function downloadVerified(urls, sha256, sender, label, stallMs = 25000) {
+async function downloadVerified(urls, sha256, sender, label, stallMs = 25000, maxBytes = 450 * 1024 * 1024) {
   const send = p => { try { if (sender && !sender.isDestroyed()) sender.send('nx-dl-progress', { label, ...p }); } catch (_) {} };
   for (const url of urls) {
     const host = (() => { try { return new URL(url).hostname; } catch (_) { return ''; } })();
@@ -36,10 +31,12 @@ async function downloadVerified(urls, sha256, sender, label, stallMs = 25000) {
       const res = await net.fetch(url, { signal: ac.signal, cache: 'no-store' });
       if (!res.ok) { slog(label + ': ' + host + ' answered ' + res.status); clearTimeout(stall); continue; }
       const total = +res.headers.get('content-length') || 0, chunks = [], t0 = Date.now(); let got = 0, last = 0;
+      if (total > maxBytes) { slog(label + ': ' + host + ' file too large'); clearTimeout(stall); continue; }
       const reader = res.body.getReader();
       for (;;) {
         const { done, value } = await reader.read(); if (done) break;
         arm(); chunks.push(Buffer.from(value)); got += value.length;
+        if (got > maxBytes) throw new Error('download larger than allowed');
         const now = Date.now();
         if (now - last > 250) { last = now; send({ host, got, total, speed: got / Math.max(0.001, (now - t0) / 1000) }); }
       }
@@ -52,9 +49,26 @@ async function downloadVerified(urls, sha256, sender, label, stallMs = 25000) {
   }
   return null;
 }
-const OTA_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).otaPrefix; return /^https:\/\/[a-z0-9.-]+\/$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
+const OTA_PREFIX = (() => { try { const p = require(path.join(__dirname, 'build-config.json')).otaPrefix; return /^https:\/\/[a-z0-9.-]+\/([\w.-]+\/)*$/i.test(p) ? p : ''; } catch (_) { return ''; } })();
 const CMD = /^(M \d{1,5} \d{1,5}|[DU] [lrm]|W -?\d{1,4}|K \d{1,3} [01] [01]|T \d{1,5}|R -?\d{1,4} -?\d{1,4})$/;
 
+// Refuses a zip whose entries could be written outside the target folder (zip-slip) before anything is extracted.
+function zipNamesSafe(buf) {
+  try {
+    let e = -1; for (let i = buf.length - 22; i >= Math.max(0, buf.length - 70000); i--) if (buf.readUInt32LE(i) === 0x06054b50) { e = i; break; }
+    if (e < 0) return false;
+    let n = buf.readUInt16LE(e + 10), o = buf.readUInt32LE(e + 16);
+    if (n > 5000) return false;
+    while (n-- > 0) {
+      if (buf.readUInt32LE(o) !== 0x02014b50) return false;
+      const nl = buf.readUInt16LE(o + 28), xl = buf.readUInt16LE(o + 30), cl = buf.readUInt16LE(o + 32);
+      const name = buf.toString('utf8', o + 46, o + 46 + nl);
+      if (/(^|[\\/])\.\.([\\/]|$)|^[\\/]|:|\0/.test(name)) return false;
+      o += 46 + nl + xl + cl;
+    }
+    return true;
+  } catch (_) { return false; }
+}
 // ---------- OTA bundle management ----------
 const otaDir = () => path.join(app.getPath('userData'), 'ota');
 const statePath = () => path.join(app.getPath('userData'), 'ota-state.json');
@@ -78,10 +92,11 @@ ipcMain.handle('nx-ota-install', async (e, o) => {
     if (!list.length || !list.every(okUrl)) return { ok: false };
     if (!/^\d+\.\d+\.\d+$/.test(version) || !/^[0-9a-f]{64}$/i.test(sha256 || '')) return { ok: false };
     if (!list.every(u => u.split('/').pop() === `www-${version}.zip`)) return { ok: false };
-    const buf = await downloadVerified(list, sha256.toLowerCase(), e.sender, 'Update v' + version);
+    const buf = await downloadVerified(list, sha256.toLowerCase(), e.sender, 'Update v' + version, 25000, 60 * 1024 * 1024);
     if (!buf) return { ok: false };
     const base = otaDir(); fs.mkdirSync(base, { recursive: true });
     const zip = path.join(base, `www-${version}.zip`), dir = path.join(base, `www-${version}`);
+    if (!zipNamesSafe(buf)) { slog('update zip rejected: unsafe entry names'); return { ok: false }; }
     fs.rmSync(dir, { recursive: true, force: true }); fs.writeFileSync(zip, buf);
     await new Promise((ok, bad) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Expand-Archive -LiteralPath $env:NX_ZIP -DestinationPath $env:NX_DIR -Force'],
       { windowsHide: true, env: { ...process.env, NX_ZIP: zip, NX_DIR: dir } }, err => (err ? bad(err) : ok())));
@@ -101,8 +116,10 @@ ipcMain.handle('nx-native-install', async (e, o) => {
   try {
     const buf = await downloadVerified(list, o.sha256, e.sender, 'App update v' + o.version);
     if (!buf) return { ok: false, why: 'download failed or checksum mismatch' };
-    const target = path.join(app.getPath('temp'), file);
+    const stage = path.join(app.getPath('userData'), 'updates'); fs.rmSync(stage, { recursive: true, force: true }); fs.mkdirSync(stage, { recursive: true });   // private folder, not the shared temp folder
+    const target = path.join(stage, file);
     fs.writeFileSync(target, buf);
+    if (crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex') !== o.sha256) return { ok: false, why: 'checksum mismatch after saving' };
     // run after this app has exited, so the installer can replace the files
     const child = require('child_process').spawn('cmd.exe', ['/c', 'ping -n 4 127.0.0.1 >nul & "' + target + '" --updated /S --force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
     child.unref();
@@ -117,7 +134,6 @@ ipcMain.handle('nx-native-version', e => (fromOurWindow(e) && isInstalled() ? ap
 const secretFile = () => path.join(app.getPath('userData'), 'secret.bin');
 const vaultFile = () => path.join(app.getPath('userData'), 'vault.bin');
 const fromOurWindow = e => !!win && e.sender === win.webContents;
-ipcMain.on('nx-log', (e, m) => { if (fromOurWindow(e) && typeof m === 'string') slog('page: ' + m.slice(0, 400)); });   // errors of the page end up in startup.log
 // saved-PC passwords (one JSON text, encrypted with DPAPI)
 ipcMain.handle('nx-vault-get', e => {
   if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable()) return '';
@@ -278,6 +294,7 @@ function createWindow() {
   });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', e => e.preventDefault());
+  win.webContents.on('will-attach-webview', e => e.preventDefault());
   win.on('closed', () => { win = null; });
 }
 
@@ -293,16 +310,9 @@ app.whenReady().then(() => {
   });
   const ses = session.defaultSession;
   ses.setDisplayMediaRequestHandler(async (req, cb) => {
-    let src = null;
-    for (let i = 0; i < 3 && !src; i++) {      // thumbnails are not needed (and are a common failure point), so they are switched off; retried a few times
-      try { const s = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false }); src = s[0] || null; if (!src) slog('screen sources: none (try ' + (i + 1) + ')'); }
-      catch (e) { slog('screen sources failed (try ' + (i + 1) + '): ' + (e && e.message || e)); }
-      if (!src) await new Promise(r => setTimeout(r, 400));
-    }
-    slog('screen capture source: ' + (src ? src.id : 'NONE') + ' administrator=' + elevatedNow);
-    if (!src) return cb({});
-    cb(req.audioRequested ? { video: src, audio: 'loopback' } : { video: src });   // 'loopback' = the sound this PC plays
+    try { const s = await desktopCapturer.getSources({ types: ['screen'] }); cb(req.audioRequested ? { video: s[0], audio: 'loopback' } : { video: s[0] }); } catch (_) { cb({}); }   // 'loopback' = the sound this PC plays
   });
+  ses.setPermissionCheckHandler((wc, perm, origin) => !!origin && origin.startsWith('app://nexadesk') && ['media', 'display-capture', 'clipboard-sanitized-write', 'clipboard-read'].includes(perm));
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(wc.getURL().startsWith('app://nexadesk/') && ['media', 'display-capture', 'clipboard-sanitized-write', 'clipboard-read'].includes(perm)));
   createWindow();
   applyWindowIcon();

@@ -146,8 +146,6 @@ try {
   $relSha = (& git.exe rev-parse HEAD).Trim()
 } finally { Pop-Location }
 
-Write-Host "Pushed to GitHub: source code + update files (https://github.com/$repoSlug). The 'ota' RELEASE page only changes when new installers are built (full release)." -ForegroundColor Green
-
 # keep the local ota\ folder identical to what was published (it was going stale before)
 $localOta = Join-Path $root 'ota'; New-Item -ItemType Directory -Force $localOta | Out-Null
 Get-ChildItem $localOta -File | Remove-Item -Force

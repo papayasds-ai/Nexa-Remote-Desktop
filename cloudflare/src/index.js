@@ -21,7 +21,7 @@ export default {
     if (url.pathname === '/notify' && req.method === 'POST') {          // called by publish-ota.ps1 right after a release
       const got = req.headers.get('Authorization') || '';
       if (!env.OTA_NOTIFY_TOKEN || !safeEq(got, 'Bearer ' + env.OTA_NOTIFY_TOKEN)) return new Response('forbidden', { status: 403 });
-      return env.HUB.get(env.HUB.idFromName('hub')).fetch(new Request('https://hub/broadcast', { method: 'POST', body: (await req.text()).slice(0, 2000) }));
+      return env.HUB.get(env.HUB.idFromName('hub')).fetch(new Request('https://hub/broadcast', { method: 'POST', body: ((+req.headers.get('content-length') || 0) > 4000 ? '{}' : (await req.text()).slice(0, 2000)) }));
     }
     if (url.pathname === '/health') return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('NexaDesk signaling server', { status: 200 });
@@ -73,6 +73,7 @@ export class Hub {
     // flood control: max 400 messages / 10 s per IP
     const mk = att.ip, c = (this.ipMsg.get(mk) || []).filter(t => now - t < 10000); c.push(now); this.ipMsg.set(mk, c);
     if (c.length > 400) return ws.close(1008, 'rate limit');
+    if (this.ipMsg.size > 2000) for (const [k, v] of this.ipMsg) if (!v.length || now - v[v.length - 1] > 10000) this.ipMsg.delete(k);   // keep the table small
 
     let m; try { m = JSON.parse(raw); } catch (_) { return; }
     if (!m || typeof m.t !== 'string') return;
@@ -96,6 +97,7 @@ export class Hub {
 
     if (m.t === 'req') {
       const a = (this.ipReq.get(att.ip) || []).filter(t => now - t < 60000); a.push(now); this.ipReq.set(att.ip, a);
+      if (this.ipReq.size > 2000) for (const [k, v] of this.ipReq) if (!v.length || now - v[v.length - 1] > 60000) this.ipReq.delete(k);
       if (a.length > 20) return send(ws, { t: 'deny', from: m.to, reason: 'Too many requests. Slow down.' });
     }
     const target = this.find(m.to);

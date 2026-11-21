@@ -60,5 +60,9 @@ pre.hint{margin:8px 0 0;font:12.5px Consolas,monospace}
 .dlbar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0}
 .dlbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#5b8cff,#8a5cff);transition:width .25s}
 
-.prelog{white-space:pre-wrap;max-height:220px;overflow:auto}.prewrap{white-space:pre-wrap}
-.mt4{margin-top:4px}.mt10{margin-top:10px}.mt20{margin-top:20px}.row .f2{flex:2 1 220px}.row .f1{flex:1 1 120px}
+#fab{position:absolute;top:calc(8px + env(safe-area-inset-top));right:8px;z-index:45;width:42px;height:42px;padding:0;border-radius:21px;opacity:.55;font-size:18px}
+#fab:hover,#fab:active{opacity:1}
+#session.immersive .bar,#session.immersive .padbar{display:none}
+#netNote{position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:46;background:#b36b00;color:#fff;padding:6px 14px;border-radius:10px;font-size:13px}
+.fkeys{display:flex;flex-wrap:wrap;gap:6px;width:100%}.fkeys button{flex:1;min-width:48px;padding:10px 4px}
+.stage{position:relative}

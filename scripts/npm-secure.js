@@ -72,7 +72,7 @@ function audit(omitDev) {
     const fix = fa === true ? 'fixed by npm audit fix' : fa && fa.name ? 'upgrade ' + fa.name + ' to ' + fa.version + (fa.isSemVerMajor ? ' (major version)' : '') : 'no fix published yet';
     return k + ' (' + x.severity + '): ' + why + ' - ' + fix;
   });
-  return { ok: true, total: v.total || 0, high: (v.high || 0) + (v.critical || 0), bad, details, names: entries.map(([k]) => k) };
+  return { ok: true, total: v.total || 0, high: (v.high || 0) + (v.critical || 0), bad, details };
 }
 const scope = flags.has('--block-all') ? 'all' : flags.has('--runtime') ? 'runtime' : flags.has('--shipped') ? 'shipped' : 'none';
 const both = () => ({ all: audit(false), shipped: scope === 'shipped' ? audit(true) : null });
@@ -111,11 +111,9 @@ else {
     for (const f of ['package.json.before-force', 'package-lock.json.before-force']) if (down.length) try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
     a = both();
   }
-  const toolsOnly = scope === 'runtime' && a.all.total > 0 && !a.all.names.some(n => shippedNames().has(n));
   if (a.all.total === 0) say('no known vulnerabilities');
-  else if (toolsOnly) say('OK for shipping: nothing in the app itself is affected. ' + a.all.total + ' advisories remain only inside the installer builder (electron-builder), which never ships; no fixed release of it exists yet, and npm picks it up automatically once there is one.');
   else say(a.all.total + ' known vulnerabilities left (' + a.all.high + ' high/critical)' + (a.all.bad.length ? ': ' + a.all.bad.slice(0, 8).join(', ') : '') + '. Details:');
-  if (a.all.total > 0 && !toolsOnly) for (const d of a.all.details.slice(0, 12)) say('  - ' + d);
+  if (a.all.total > 0) for (const d of a.all.details.slice(0, 12)) say('  - ' + d);
   if (a.all.total > 0 && scope !== 'runtime' && !flags.has('--force-fix') && a.all.details.some(d => /major version|no fix/.test(d))) say('Fixes that need a major upgrade: NexaDesk.bat security -Force (makes backups, refuses downgrades).');
 }
 if (deprecated.size) {

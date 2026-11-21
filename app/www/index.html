@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src ws: wss: __OTA_ORIGIN__; img-src 'self' data:; media-src 'self' blob:; style-src 'self'; script-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src ws: wss: __OTA_ORIGIN__; img-src 'self' data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'">
 <title>NexaDesk</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -79,7 +79,7 @@
         <div class="card wide">
           <h2>Update log</h2>
           <p class="hint">What this device did during the last update checks. Share it if an update fails.</p>
-          <pre id="updLogBox" class="hint prelog"></pre>
+          <pre id="updLogBox" class="hint" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre>
         </div>
         <div class="card wide">
           <h2>Connection log</h2>
@@ -97,10 +97,10 @@
         <div class="lbl">Extra ICE/TURN servers (optional JSON array)</div>
         <textarea id="extraIce" rows="3" placeholder='[{"urls":"turn:host:3478","username":"u","credential":"p"}]'></textarea>
         <div class="lbl">Add a TURN relay (needed for mobile data / strict networks)</div>
-        <div class="row mt4"><input id="turnHost" class="f2" placeholder="host:port  e.g. free.expressturn.com:3478"><input id="turnUser" class="f1" placeholder="username" autocomplete="off"><input id="turnPass" class="f1" type="password" placeholder="password" autocomplete="off"><button id="addTurn">Add</button></div>
+        <div class="row" style="margin-top:4px"><input id="turnHost" placeholder="host:port  e.g. free.expressturn.com:3478" style="flex:2 1 220px"><input id="turnUser" placeholder="username" autocomplete="off" style="flex:1 1 120px"><input id="turnPass" type="password" placeholder="password" autocomplete="off" style="flex:1 1 120px"><button id="addTurn">Add</button></div>
         <button class="primary" id="saveSet">Save &amp; reconnect</button>
-        <button id="testConn" class="mt10">Test connection (server, STUN, TURN)</button>
-        <pre id="testBox" class="hint prewrap"></pre>
+        <button id="testConn" style="margin-top:10px">Test connection (server, STUN, TURN)</button>
+        <pre id="testBox" class="hint" style="white-space:pre-wrap"></pre>
         <div class="lbl">Version</div><div id="verInfo"></div><div id="bundleInfo" class="hint"></div><div id="updBox" class="hint"></div><div id="dlBar" class="dlbar" hidden><i></i></div><button id="chkUpd">Check for updates</button>
         <label class="chk"><input type="checkbox" id="autoUpd"> Install updates automatically</label>
         <button class="primary" id="installUpd" hidden>Install update</button>
@@ -109,7 +109,7 @@
         <a id="apkLink" href="#" target="_blank" hidden></a>
         <p class="hint">Use <b>wss://</b> (TLS) for internet use. Plain ws:// is for trusted LANs only.</p>
       </div>
-      <div class="card mt20" id="pcCard" hidden>
+      <div class="card" id="pcCard" hidden style="margin-top:20px">
         <h2>This PC</h2>
         <label class="chk"><input type="checkbox" id="optAwake"> Keep this PC awake while NexaDesk is running (so you can always reach it)</label>
         <label class="chk"><input type="checkbox" id="optAutostart"> Start NexaDesk (minimized) when I sign in to Windows</label>
@@ -144,10 +144,14 @@
     <button id="btnSound" hidden>Sound off</button>
     <button id="btnPcClip">Get PC clipboard</button>
     <button id="btnSwitch">Switch PC</button>
+    <button id="btnZoom">Zoom</button>
+    <button id="btnShot">Screenshot</button>
     <button id="btnFit">Fit/100%</button>
     <button id="btnFs">Fullscreen</button>
     <button id="btnEnd" class="danger">End</button>
   </div>
+  <div id="netNote" hidden>Connection unstable - trying to recover...</div>
+  <button id="fab" title="Hide / show the controls">&#9776;</button>
   <div class="stage"><video id="vid" autoplay playsinline muted tabindex="0"></video></div>
   <div class="padbar" id="padBar" hidden>
     <button id="tpLeft">Left click</button>
@@ -164,8 +168,17 @@
       <button data-combo="alt-f4">Alt+F4</button>
       <button data-combo="esc">Esc</button>
       <button data-combo="printscreen">Print Screen</button>
+      <button data-combo="ctrl-s">Ctrl+S</button>
+      <button data-combo="ctrl-f">Ctrl+F</button>
+      <button data-combo="ctrl-w">Ctrl+W</button>
+      <button data-combo="ctrl-t">Ctrl+T</button>
+      <button data-combo="win-r">Win+R</button>
+      <button data-combo="win-e">Win+E</button>
+      <button data-combo="enter">Enter</button>
+      <button data-combo="tab">Tab</button>
+      <div id="fKeys" class="fkeys"></div>
     </div>
-    <div class="tphint">Drag anywhere on the screen = move &middot; Tap = click &middot; Tap twice and drag = drag &middot; Two fingers = scroll &middot; Two-finger tap or press-and-hold = right click</div>
+    <div class="tphint">Drag anywhere on the screen = move &middot; Tap = click &middot; Tap twice and drag = drag &middot; Two fingers = scroll &middot; Pinch = zoom (two fingers move the zoomed picture) &middot; Two-finger tap or press-and-hold = right click</div>
   </div>
   <input id="kbd" class="kbd" autocomplete="off" autocapitalize="off" spellcheck="false">
 </div>
