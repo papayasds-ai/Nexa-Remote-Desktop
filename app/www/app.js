@@ -130,7 +130,7 @@ async function onAuth(from, mac) {
   if (kind === 'password' && S.get('unattended', false)) perm = { control: S.get('defControl', true), clip: S.get('defClip', true), files: S.get('defFiles', true) };
   else perm = await askConsent(from);
   if (!perm) { log('host', from, 'denied by user'); return send({ t: 'deny', to: from, reason: 'The user declined the request.' }); }
-  try { await startHost(from, secret, perm); } catch (e) { console.error(e); toast('Could not start screen sharing: ' + ((e && (e.name + ' ' + e.message)) || e)); if (e && e.name === 'NotReadableError' && window.nexa && window.nexa.captureCompat) window.nexa.captureCompat().then(r => { if (r && r.ok) toast('Switching to a compatible capture mode - NexaDesk restarts, then connect again'); }).catch(() => {});
+  try { await startHost(from, secret, perm); } catch (e) { console.error(e); toast('Could not start screen sharing: ' + ((e && (e.name + ' ' + e.message)) || e)); if (e && e.name === 'NotReadableError') toast('Screen capture failed. If NexaDesk runs as administrator, restart it normally and use Settings > Admin control instead.');
   try { window.nexa && window.nexa.log && window.nexa.log('startHost failed: ' + (e && (e.name + ' ' + e.message))); } catch (_) {} send({ t: 'deny', to: from, reason: 'Host could not capture the screen.' }); endHost(false); }
 }
 function askConsent(from) {
@@ -702,6 +702,11 @@ if (canHost && window.nexa.admin) {
       : 'Running normally: Windows ignores the remote mouse and keyboard in admin windows such as Task Manager. Restart as administrator to control them.';
     $('#btnElevate').hidden = r.elevated; $('#rowAdminAuto').hidden = !(r.elevated && r.packaged); $('#optAdminAuto').checked = !!r.task;
   };
+  if (window.nexa.adminInput) {
+    const refreshInp = async () => { const r = await window.nexa.adminInput({}); if (!r || !r.ok) return; $('#adminInputState').textContent = r.task ? 'Admin control is ON' + (r.connected ? ' (helper running).' : ' (the helper starts when needed).') : 'Admin control is off.'; $('#optAdminInput').checked = !!r.task; };
+    $('#optAdminInput').onchange = async e => { toast('Windows will ask for permission...'); const r = await window.nexa.adminInput({ enable: e.target.checked }); if (!r || !r.ok) { e.target.checked = !e.target.checked; toast('Not changed (cancelled?)'); } else toast(e.target.checked ? 'Admin control enabled' : 'Admin control disabled'); refreshInp(); };
+    refreshInp(); $('#adminInputRow').hidden = false;
+  }
   $('#btnElevate').onclick = async () => { toast('Windows will ask for permission…'); const r = await window.nexa.admin({ relaunch: true }); if (!r || !r.ok) toast('Cancelled: NexaDesk keeps running normally'); };
   $('#optAdminAuto').onchange = async e => {
     const r = await window.nexa.admin({ autostart: e.target.checked });

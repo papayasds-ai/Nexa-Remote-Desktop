@@ -11,11 +11,6 @@ const slog = m => { try { const f = path.join(app.getPath('userData'), 'startup.
 // "installed" = set up by the Setup (an uninstaller sits next to the exe). Portable builds (EXE or ZIP) never get installer updates.
 const isInstalled = () => { if (process.env.PORTABLE_EXECUTABLE_FILE) return false; try { return fs.readdirSync(path.dirname(process.execPath)).some(n => /^Uninstall .*\.exe$/i.test(n)); } catch (_) { return false; } };
 slog('start v' + app.getVersion() + (isInstalled() ? '' : ' (portable/unpacked)') + ' args=' + process.argv.slice(1).join(' '));
-// Capture compatibility: when Windows refuses the screen capture ("Could not start video source", seen when running as administrator), the page asks for
-// a restart in a safer capture mode. Level 1 = older desktop capture API, level 2 = also without GPU acceleration. The level is kept in a small file.
-const compatFile = () => path.join(app.getPath('userData'), 'capture-compat');
-const compatLevel = () => { try { return Math.min(2, Math.max(0, parseInt(fs.readFileSync(compatFile(), 'utf8'), 10) || 0)); } catch (_) { return 0; } };
-{ const lv = compatLevel(); if (lv >= 1) { app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcDesktopCapturer,AllowWgcWindowCapturer'); } if (lv >= 2) app.disableHardwareAcceleration(); slog('capture compatibility level ' + lv); }
 if (!app.requestSingleInstanceLock()) { slog('another NexaDesk is already running (it holds the lock): this one quits'); app.quit(); process.exit(0); }
 
 let win = null, helper = null, fellBack = false, tray = null, keepTray = false, quitting = false;
@@ -193,14 +188,6 @@ const ADMIN_TASK = 'NexaDesk Autostart';
 const elevatedP = process.platform === 'win32' ? new Promise(ok => execFile('fltmc.exe', [], { windowsHide: true }, err => ok(!err))) : Promise.resolve(false);
 elevatedP.then(v => slog('administrator rights: ' + v));
 const runOk = (file, args, opt) => new Promise(ok => execFile(file, args, { windowsHide: true, ...(opt || {}) }, err => ok(!err)));
-ipcMain.handle('nx-capture-compat', e => {
-  if (!fromOurWindow(e) || process.platform !== 'win32') return { ok: false };
-  const lv = compatLevel(); if (lv >= 2) return { ok: false, why: 'already at the safest capture mode' };
-  try { fs.writeFileSync(compatFile(), String(lv + 1)); } catch (_) { return { ok: false }; }
-  slog('capture failed: restarting in compatibility level ' + (lv + 1));
-  app.releaseSingleInstanceLock(); app.relaunch({ args: process.argv.slice(1).filter(a => a !== '--updated') }); setTimeout(() => { quitting = true; app.quit(); }, 400);
-  return { ok: true };
-});
 ipcMain.on('nx-log', (e, m) => { if (fromOurWindow(e)) slog('ui: ' + m); });
 ipcMain.handle('nx-admin', async (e, o) => {
   if (!fromOurWindow(e) || process.platform !== 'win32') return { ok: false };
@@ -264,9 +251,66 @@ function ensureHelper() {
   helper.on('exit', () => { helper = null; });
   helper.stdin.on('error', () => {});
 }
+// ---- admin input: the app stays a NORMAL process (screen capture fails in an elevated Electron on some PCs), only a tiny PowerShell helper runs
+// elevated through a scheduled task (created once with one UAC prompt) and receives the same whitelisted commands over a localhost socket. ----
+const INPUT_TASK = 'NexaDesk Input', PD_HELPER = () => path.join(process.env.ProgramData || 'C:\\ProgramData', 'NexaDesk', 'inputhelper.ps1');
+let adminSrv = null, adminSock = null, adminToken = '', adminLaunchAt = 0, adminOn = false;
+function adminStartServer() {
+  if (adminSrv) return;
+  adminToken = crypto.randomBytes(24).toString('hex');
+  adminSrv = require('net').createServer(sock => {
+    let buf = '', ok = false;
+    sock.setNoDelay(true); sock.on('error', () => {});
+    sock.on('data', d => { if (ok) return; buf += d.toString('utf8'); if (buf.length > 200) return sock.destroy(); const nl = buf.indexOf('\n'); if (nl < 0) return;
+      if (buf.slice(0, nl).trim() === adminToken && !adminSock) { ok = true; adminSock = sock; slog('admin input helper connected'); } else sock.destroy(); });
+    sock.on('close', () => { if (adminSock === sock) { adminSock = null; slog('admin input helper disconnected'); } });
+  });
+  adminSrv.on('error', () => { adminSrv = null; });
+  adminSrv.listen(0, '127.0.0.1', () => {
+    try { const dir = app.getPath('userData'); fs.writeFileSync(path.join(dir, 'helper.port'), String(adminSrv.address().port)); fs.writeFileSync(path.join(dir, 'helper.token'), adminToken); } catch (_) {}
+  });
+}
+function adminLaunch() {
+  if (!adminOn || adminSock || Date.now() - adminLaunchAt < 8000) return;
+  adminLaunchAt = Date.now(); adminStartServer();
+  setTimeout(() => execFile('schtasks.exe', ['/Run', '/TN', INPUT_TASK], { windowsHide: true }, err => { if (err) slog('admin input helper could not be started'); }), 300);
+}
+if (process.platform === 'win32') execFile('schtasks.exe', ['/Query', '/TN', INPUT_TASK], { windowsHide: true }, err => { adminOn = !err; if (adminOn) { slog('admin input task found'); adminStartServer(); adminLaunch(); } });
+ipcMain.handle('nx-admin-input', async (e, o) => {
+  if (!fromOurWindow(e) || process.platform !== 'win32') return { ok: false };
+  o = o || {};
+  if (o.enable === true) {
+    const user = (process.env.USERDOMAIN ? process.env.USERDOMAIN + '\\' : '') + (process.env.USERNAME || '');
+    if (!/^[\w .\\-]{1,80}$/.test(user)) return { ok: false, why: 'unusual user name' };
+    const q = s => String(s).replace(/'/g, "''");
+    const script = [
+      "$ErrorActionPreference='Stop'",
+      "$d=Join-Path $env:ProgramData 'NexaDesk'; New-Item -ItemType Directory -Force $d | Out-Null",
+      "Copy-Item -LiteralPath '" + q(helperPath()) + "' -Destination (Join-Path $d 'inputhelper.ps1') -Force",
+      "& icacls.exe $d /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null",
+      "$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"'+(Join-Path $d 'inputhelper.ps1')+'\" -Dir \"" + q(app.getPath('userData')) + "\"')",
+      "$p=New-ScheduledTaskPrincipal -UserId '" + q(user) + "' -LogonType Interactive -RunLevel Highest",
+      "$s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)",
+      "Register-ScheduledTask -TaskName '" + INPUT_TASK + "' -Action $a -Principal $p -Settings $s -Force | Out-Null"
+    ].join('\r\n');
+    const b64 = Buffer.from(script, 'utf16le').toString('base64');
+    const ok = await runOk('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+      "try { Start-Process -FilePath powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','" + b64 + "' -ErrorAction Stop; exit 0 } catch { exit 1 }"]);
+    const has = await runOk('schtasks.exe', ['/Query', '/TN', INPUT_TASK]);
+    if (!ok || !has) return { ok: false, why: 'cancelled or failed' };
+    adminOn = true; adminStartServer(); adminLaunchAt = 0; adminLaunch(); slog('admin input enabled');
+  } else if (o.enable === false) {
+    const ok = await runOk('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+      "try { Start-Process -FilePath schtasks.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '/Delete','/TN','" + INPUT_TASK + "','/F' -ErrorAction Stop; exit 0 } catch { exit 1 }"]);
+    if (ok) { adminOn = false; try { adminSock && adminSock.destroy(); } catch (_) {} slog('admin input disabled'); }
+  }
+  const task = await runOk('schtasks.exe', ['/Query', '/TN', INPUT_TASK]);
+  return { ok: true, task, connected: !!adminSock, elevated: await elevatedP };
+});
 ipcMain.on('nx-input', (e, cmd) => {
   if (!win || e.sender !== win.webContents) return;
   if (typeof cmd !== 'string' || !CMD.test(cmd)) return;        // strict whitelist: nothing else reaches PowerShell
+  if (adminOn) { adminLaunch(); if (adminSock) { try { adminSock.write(cmd + '\n'); return; } catch (_) {} } }   // elevated helper when it is connected
   ensureHelper(); if (helper) helper.stdin.write(cmd + '\n');
 });
 ipcMain.on('nx-focus', e => { if (win && e.sender === win.webContents) { win.show(); win.focus(); win.flashFrame(true); } });
@@ -333,5 +377,5 @@ app.whenReady().then(() => {
 });
 app.on('second-instance', () => showWin());
 app.on('before-quit', () => { quitting = true; slog('quit'); });
-app.on('will-quit', () => { if (helper) helper.kill(); });
+app.on('will-quit', () => { if (helper) helper.kill(); try { adminSock && adminSock.destroy(); adminSrv && adminSrv.close(); } catch (_) {} });
 app.on('window-all-closed', () => { if (helper) helper.kill(); app.quit(); });

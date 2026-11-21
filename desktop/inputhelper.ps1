@@ -1,4 +1,6 @@
-# NexaDesk input helper: reads whitelisted commands from stdin and injects mouse/keyboard events.
+# NexaDesk input helper: reads whitelisted commands and injects mouse/keyboard events.
+# Normal mode: commands come from stdin. Admin mode (-Dir <NexaDesk data folder>): started elevated by a scheduled task, connects to the app on 127.0.0.1.
+param([string]$Dir = '')
 Add-Type -TypeDefinition @"
 using System; using System.Runtime.InteropServices;
 public static class NX {
@@ -18,9 +20,21 @@ public static class NX {
 }
 "@
 $btn = @{ l = @(2, 4); r = @(8, 16); m = @(32, 64) }
+$rx = [IO.TextReader]::Null
+if ($Dir) {
+  try {
+    $port = [int](Get-Content -LiteralPath (Join-Path $Dir 'helper.port') -Raw).Trim()
+    $tok = (Get-Content -LiteralPath (Join-Path $Dir 'helper.token') -Raw).Trim()
+    $cl = New-Object Net.Sockets.TcpClient('127.0.0.1', $port)
+    $st = $cl.GetStream(); $wr = New-Object IO.StreamWriter($st); $wr.NewLine = "`n"; $wr.WriteLine($tok); $wr.Flush()
+    $rx = New-Object IO.StreamReader($st)
+  } catch { exit 1 }
+} else { $rx = [Console]::In }
+$ok = '^(M \d{1,5} \d{1,5}|[DU] [lrm]|W -?\d{1,4}|K \d{1,3} [01] [01]|T \d{1,5}|R -?\d{1,4} -?\d{1,4})$'
 while ($true) {
-  $line = [Console]::In.ReadLine()
+  $line = $rx.ReadLine()
   if ($null -eq $line) { break }
+  if ($line -notmatch $ok) { continue }
   $p = $line.Split(' ')
   try {
     switch ($p[0]) {

@@ -4,7 +4,6 @@ contextBridge.exposeInMainWorld('nexa', {
   canHost: process.platform === 'win32',   // input injection helper is Windows-only; other OSes are viewer-only
   input: cmd => ipcRenderer.send('nx-input', String(cmd)),
   focus: () => ipcRenderer.send('nx-focus'),
-  captureCompat: () => ipcRenderer.invoke('nx-capture-compat'),
   log: m => ipcRenderer.send('nx-log', String(m).slice(0, 300)),
   otaInstall: o => ipcRenderer.invoke('nx-ota-install', o),
   otaApply: () => ipcRenderer.send('nx-ota-apply'),
@@ -20,6 +19,7 @@ contextBridge.exposeInMainWorld('nexa', {
   // saved-PC passwords: encrypted with the Windows account key (DPAPI), only readable by this app window
   vault: { get: () => ipcRenderer.invoke('nx-vault-get'), set: v => ipcRenderer.invoke('nx-vault-set', v) },
   // run as administrator (so mouse/keyboard also reach Task Manager, installers, other admin windows)
+  adminInput: o => ipcRenderer.invoke('nx-admin-input', o || {}),
   admin: o => ipcRenderer.invoke('nx-admin', o || {}),
   // file transfer to this PC (saved in Downloads\NexaDesk Received)
   fileOpen: o => ipcRenderer.invoke('nx-file-open', o),
