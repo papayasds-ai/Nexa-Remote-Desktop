@@ -74,13 +74,16 @@ function Invoke-CloudWindowsBuild([string]$root, [string]$repo, [string]$ver, [s
     Start-Sleep -Seconds 15
     $el = [int]((Get-Date) - $t0).TotalSeconds
     if ($el -gt 2700) { Write-Host 'The GitHub build took longer than 45 minutes. Open the run page above to see why.' -ForegroundColor Red; return $fail }
-    $rc = Invoke-GhC run view $id --repo $repo --json status,conclusion --jq '.status + " " + .conclusion'
-    if ($rc -ne 0) {
+    # no quotes inside --jq (Windows PowerShell 5.1 splits such arguments): read the plain JSON and parse it here
+    $st = ''
+    $rc = Invoke-GhC run view $id --repo $repo --json status,conclusion
+    if ($rc -eq 0) { try { $j = ($script:cwOut -join "`n") | ConvertFrom-Json; $st = ("$($j.status) $($j.conclusion)").Trim() } catch { $st = '' } }
+    if (-not $st) {
       $why = (@($script:cwOut) -join ' ')
-      $rc = Invoke-GhC run list --repo $repo --workflow build-windows.yml --limit 10 --json databaseId,status,conclusion --jq ".[] | select(.databaseId==$id) | .status + \" \" + .conclusion"
-      if ($rc -ne 0 -or -not @($script:cwOut)) { Write-Host "    could not read the build status (${el}s): $why" -ForegroundColor Yellow; continue }
+      $rc = Invoke-GhC run list --repo $repo --workflow build-windows.yml --limit 10 --json databaseId,status,conclusion
+      if ($rc -eq 0) { try { $j = (($script:cwOut -join "`n") | ConvertFrom-Json) | Where-Object { [int64]$_.databaseId -eq $id } | Select-Object -First 1; if ($j) { $st = ("$($j.status) $($j.conclusion)").Trim() } } catch { $st = '' } }
+      if (-not $st) { Write-Host "    could not read the build status (${el}s): $why" -ForegroundColor Yellow; continue }
     }
-    $st = ("$(@($script:cwOut)[0])").Trim()
     if ($st -like 'completed*') { $concl = ($st -replace '^completed\s*', '').Trim(); break }
     if (((Get-Date) - $lastPrint).TotalSeconds -ge 45) { $lastPrint = Get-Date; Write-Host "    building on GitHub ... $st (${el}s)" -ForegroundColor DarkGray }
   }
