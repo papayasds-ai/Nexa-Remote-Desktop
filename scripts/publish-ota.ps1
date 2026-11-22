@@ -17,7 +17,7 @@ function Invoke-Gh { $ErrorActionPreference = 'Continue'; $script:ghOut = & gh.e
 # Only the Setup EXE and the APK are uploaded (the in-app updater uses just these); the 75 MB Portable EXE only with -WithPortable.
 function Publish-OtaRelease([string]$ver, [string]$sha, [string]$outDir) {
   $names = @("NexaDesk-Setup-$ver.exe", "NexaDesk-$ver.apk"); if ($WithPortable -or $CloudSha) { $names += "NexaDesk-Portable-$ver.exe" }   # with a cloud build the Setup/Portable are already on the release and must be kept
-  $files = @(Get-ChildItem $outDir -File -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.Name })
+  $files = @(Get-ChildItem $outDir -File -ErrorAction SilentlyContinue | Where-Object { ($names -contains $_.Name) -and -not ($CloudSha -and $_.Name -like 'NexaDesk-*.exe') })   # cloud build: Setup/Portable are already on the release, never re-upload them
   if ($files.Count -eq 0) { Write-Host "GitHub 'ota' release left unchanged: no v$ver builds in output\ (a quick update only changes the web layer)." -ForegroundColor Yellow; return }
   if ($names[1] -notin $files.Name) { Write-Host "Note: no Android APK for v$ver, so the release will not contain one." -ForegroundColor Yellow }
   if (-not (Get-Command gh.exe -ErrorAction SilentlyContinue)) { Write-Host "GitHub 'ota' release NOT updated: GitHub CLI is not installed. Run: winget install GitHub.cli   then: gh auth login   then run this again." -ForegroundColor Red; return }

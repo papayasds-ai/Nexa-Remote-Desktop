@@ -108,3 +108,14 @@ function Invoke-CloudWindowsBuild([string]$root, [string]$repo, [string]$ver, [s
   Write-Host "  built and verified on GitHub: $($info.setup.name), $($info.portable.name)" -ForegroundColor Green
   return [pscustomobject]@{ ok = $true; setupSha = [string]$info.setup.sha256; portableSha = [string]$info.portable.sha256 }
 }
+
+# Copies the installers built on GitHub into output\ (downloads are fast), so the folder holds them like after a local build. Best effort.
+function Get-CloudInstallers([string]$root, [string]$repo, [string]$ver) {
+  $out = Join-Path $root 'output'; New-Item -ItemType Directory -Force $out | Out-Null
+  Get-ChildItem $out -Filter 'NexaDesk-Setup-*.exe' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne "NexaDesk-Setup-$ver.exe" } | Remove-Item -Force -ErrorAction SilentlyContinue
+  foreach ($n in @("NexaDesk-Setup-$ver.exe", "NexaDesk-Portable-$ver.exe")) {
+    if (Test-Path (Join-Path $out $n)) { continue }
+    Write-Host "  downloading $n to output\ ..." -ForegroundColor DarkGray
+    if ((Invoke-GhC release download ota --repo $repo --pattern $n --dir $out --clobber) -ne 0) { Write-Host "  could not download ${n}: $(@($script:cwOut) -join ' ')" -ForegroundColor Yellow }
+  }
+}

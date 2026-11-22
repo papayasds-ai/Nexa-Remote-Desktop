@@ -26,7 +26,7 @@ if (Test-CloudWindows $root $repoSlug) {
   Initialize-UpdateKeys $root | Out-Null   # writes app\www\update-keys.js, which the cloud build needs
   $cv = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
   $cw = Invoke-CloudWindowsBuild $root $repoSlug $cv $u (Join-Path $root 'build')
-  if ($cw.ok) { $cloudSha = $cw.setupSha } else { Write-Host 'Cloud build did not work, building on this PC instead.' -ForegroundColor Yellow }
+  if ($cw.ok) { $cloudSha = $cw.setupSha; Get-CloudInstallers $root $repoSlug $cv } else { Write-Host 'Cloud build did not work, building on this PC instead.' -ForegroundColor Yellow }
 }
 if (-not $cloudSha) { & "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump }
 try {
