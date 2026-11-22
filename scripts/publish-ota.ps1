@@ -1,6 +1,6 @@
 # Publishes a web-layer OTA update to GitHub: ota/update.json + ota/www-<version>.zip (old packages are erased),
 # syncs the source code, updates the server, then pings every online device so they update immediately.
-param([switch]$NoBump, [switch]$Force, [switch]$WithPortable, [switch]$RetryUpload, [string]$AppKey = '', [string]$RecoveryKey = '')   # -RecoveryKey <file>: publish with the offline recovery key (daily key lost)   # -AppKey <id|none>: legacy bridge for apps installed before signing was removed
+param([switch]$NoBump, [switch]$Force, [switch]$WithPortable, [switch]$RetryUpload, [string]$AppKey = '', [string]$RecoveryKey = '', [string]$CloudSha = '')   # -CloudSha: SHA256 of the Setup built on GitHub (set by release-all.ps1)   # -RecoveryKey <file>: publish with the offline recovery key (daily key lost)   # -AppKey <id|none>: legacy bridge for apps installed before signing was removed
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\common.ps1"
@@ -16,7 +16,7 @@ function Invoke-Gh { $ErrorActionPreference = 'Continue'; $script:ghOut = & gh.e
 # and this version's files are uploaded one by one with retries (a failed upload no longer restarts the others).
 # Only the Setup EXE and the APK are uploaded (the in-app updater uses just these); the 75 MB Portable EXE only with -WithPortable.
 function Publish-OtaRelease([string]$ver, [string]$sha, [string]$outDir) {
-  $names = @("NexaDesk-Setup-$ver.exe", "NexaDesk-$ver.apk"); if ($WithPortable) { $names += "NexaDesk-Portable-$ver.exe" }
+  $names = @("NexaDesk-Setup-$ver.exe", "NexaDesk-$ver.apk"); if ($WithPortable -or $CloudSha) { $names += "NexaDesk-Portable-$ver.exe" }   # with a cloud build the Setup/Portable are already on the release and must be kept
   $files = @(Get-ChildItem $outDir -File -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.Name })
   if ($files.Count -eq 0) { Write-Host "GitHub 'ota' release left unchanged: no v$ver builds in output\ (a quick update only changes the web layer)." -ForegroundColor Yellow; return }
   if ($names[1] -notin $files.Name) { Write-Host "Note: no Android APK for v$ver, so the release will not contain one." -ForegroundColor Yellow }
@@ -86,7 +86,7 @@ $native = $null
 $outDir = Join-Path $root 'output'
 $relFile = Join-Path $root 'release-host.txt'
 $setupName = "NexaDesk-Setup-$ver.exe"; $apkName = "NexaDesk-$ver.apk"
-$haveSetup = Test-Path (Join-Path $outDir $setupName); $haveApk = Test-Path (Join-Path $outDir $apkName)
+$haveSetup = (Test-Path (Join-Path $outDir $setupName)) -or [bool]$CloudSha; $haveApk = Test-Path (Join-Path $outDir $apkName)
 # Installers for in-app updates are served from the release host (release-host.txt, R2) or - when that file is missing - from the GitHub 'ota' release,
 # which only works while the repository is public (anonymous downloads).
 $useGh = $false
@@ -101,7 +101,7 @@ if (($haveSetup -or $haveApk) -and ((Test-Path $relFile) -or $useGh)) {
   foreach ($item in @(@('windows', $setupName, $haveSetup), @('android', $apkName, $haveApk))) {
     if (-not $item[2]) { continue }
     $file = Join-Path $outDir $item[1]
-    $h = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+    $h = if ($CloudSha -and $item[0] -eq 'windows') { $CloudSha.ToLower() } else { (Get-FileHash $file -Algorithm SHA256).Hash.ToLower() }
     if (-not (Test-Path $relFile)) { $native[$item[0]] = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }; continue }   # GitHub release: uploaded by the release step below
     Push-Location (Join-Path $root 'cloudflare')
     try { & npx wrangler r2 object put "nexadesk-releases/$($item[1])" --file $file --remote; $code = $LASTEXITCODE } finally { Pop-Location }

@@ -1,0 +1,2 @@
+Cloud build of the Windows installers is ON (GitHub Actions builds Setup + Portable; nothing big is uploaded from this PC).
+Delete this file to build and upload on this PC instead.

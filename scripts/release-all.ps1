@@ -19,9 +19,18 @@ if (-not (Test-Path $urlFile)) { & "$PSScriptRoot\deploy-cloudflare.ps1" }
 if (-not (Test-Path $urlFile)) { throw 'Server setup did not finish. Read the messages above.' }
 & "$PSScriptRoot\bump-version.ps1"
 $u = (Get-Content $urlFile -Raw).Trim()
-& "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump
+$repoSlug = Resolve-GitHubRepo $root
+$cloudSha = ''
+. "$PSScriptRoot\cloud-windows.ps1"
+if (Test-CloudWindows $root $repoSlug) {
+  Initialize-UpdateKeys $root | Out-Null   # writes app\www\update-keys.js, which the cloud build needs
+  $cv = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
+  $cw = Invoke-CloudWindowsBuild $root $repoSlug $cv $u (Join-Path $root 'build')
+  if ($cw.ok) { $cloudSha = $cw.setupSha } else { Write-Host 'Cloud build did not work, building on this PC instead.' -ForegroundColor Yellow }
+}
+if (-not $cloudSha) { & "$PSScriptRoot\build-windows.ps1" -ServerUrl $u -NoBump }
 try {
   if ($AllowInsecure) { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump -AllowInsecure } else { & "$PSScriptRoot\build-android.ps1" -ServerUrl $u -NoBump }
 } catch { Write-Host "`nAndroid build skipped: $($_.Exception.Message)" -ForegroundColor Yellow }
-& "$PSScriptRoot\publish-ota.ps1" -NoBump
+if ($cloudSha) { & "$PSScriptRoot\publish-ota.ps1" -NoBump -CloudSha $cloudSha } else { & "$PSScriptRoot\publish-ota.ps1" -NoBump }
 Write-Host "`nAll done. Installers are in output\" -ForegroundColor Green
