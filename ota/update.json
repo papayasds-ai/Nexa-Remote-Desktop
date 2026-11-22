@@ -1,9 +1,9 @@
 {
-    "version":  "1.0.101",
-    "bundle":  "www-1.0.101.zip",
-    "sha256":  "5502be05899451d15066178160a36d99605a37ac3551e48a8f67dc3671b0dea3",
+    "version":  "1.0.102",
+    "bundle":  "www-1.0.102.zip",
+    "sha256":  "a79e99a956809bb209e50cd7644614d1087daeb41ca6adf1569f37f6fbfb5c8b",
     "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
-    "released":  "2026-11-22T01:00:12.6750396Z",
+    "released":  "2026-11-22T01:09:49.2656850Z",
     "mirrors":  {
                     "web":  "https://raw.githubusercontent.com/papayasds-ai/Nexa-Remote-Desktop/HEAD/ota/",
                     "app":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/"
@@ -15,14 +15,14 @@
     "keyId":  "",
     "force":  false,
     "native":  {
-                   "version":  "1.0.101",
+                   "version":  "1.0.102",
                    "windows":  {
-                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.101.exe",
-                                   "sha256":  "855c1198f0f62251bc44da206b6a63561fd7f1b592b49edaa2a41c60aee01e0a"
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.102.exe",
+                                   "sha256":  "93e06191f32f05d63a619248dc6d62731b1b6b4172b817aa6999a5293149e7d6"
                                },
                    "android":  {
-                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-1.0.101.apk",
-                                   "sha256":  "e7191f91a1c0d7a611c1cf368d8b86bff2f58d861842e5d785da8f1f3e632bb3"
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-1.0.102.apk",
+                                   "sha256":  "ea778e2f78d239b32b9255d923bb63c34761da7b522f700f3c3a7e378c682581"
                                }
                }
 }
