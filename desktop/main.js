@@ -120,8 +120,14 @@ ipcMain.handle('nx-native-install', async (e, o) => {
     const target = path.join(stage, file);
     fs.writeFileSync(target, buf);
     if (crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex') !== o.sha256) return { ok: false, why: 'checksum mismatch after saving' };
-    // run after this app has exited, so the installer can replace the files
-    const child = require('child_process').spawn('cmd.exe', ['/c', 'ping -n 4 127.0.0.1 >nul & "' + target + '" --updated /S --force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
+    // Loop guard: if the same version was already tried twice and we are still not on it, stop (otherwise every start downloads and quits again).
+    const af = path.join(app.getPath('userData'), 'native-attempt.json'); let at = {}; try { at = JSON.parse(fs.readFileSync(af, 'utf8')); } catch (_) {}
+    if (cmp(app.getVersion(), o.version) >= 0) at = {};
+    if (at.version === o.version && at.n >= 2) { slog('app update v' + o.version + ': installer did not complete twice, giving up (install ' + file + ' by hand from the release)'); return { ok: false, why: 'The installer did not finish twice. Install ' + file + ' by hand (GitHub release ota).' }; }
+    try { fs.writeFileSync(af, JSON.stringify({ version: o.version, n: at.version === o.version ? at.n + 1 : 1 })); } catch (_) {}
+    // The installer is started directly (no cmd window: a visible console that gets clicked freezes and the update never runs). The Setup itself waits for / closes this app.
+    const child = require('child_process').spawn(target, ['--updated', '/S', '--force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', e => slog('installer could not start: ' + (e && e.message)));
     child.unref();
     slog('app update v' + o.version + ': installer started, quitting (the installer restarts the app)');
     setTimeout(() => app.quit(), 800);
