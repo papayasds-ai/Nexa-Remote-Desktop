@@ -1,9 +1,9 @@
 {
-    "version":  "1.0.123",
-    "bundle":  "www-1.0.123.zip",
-    "sha256":  "a2ce8dfab2c65dccdb95564998c7e851eefb6ff29ea38eff1b1e849a12b112ee",
+    "version":  "1.0.126",
+    "bundle":  "www-1.0.126.zip",
+    "sha256":  "24c8184ad947fc7db586926568d92e88e6e839980dec2e29ac90cba18077ee05",
     "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
-    "released":  "2026-11-23T22:26:39.1233613Z",
+    "released":  "2026-11-23T23:57:52.3128822Z",
     "mirrors":  {
                     "web":  "https://raw.githubusercontent.com/papayasds-ai/Nexa-Remote-Desktop/HEAD/ota/",
                     "app":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/"
@@ -13,18 +13,18 @@
                   "047d1bba55ce3069"
               ],
     "keyId":  "",
-    "force":  false,
+    "force":  true,
     "native":  {
-                   "version":  "1.0.123",
+                   "version":  "1.0.126",
                    "windows":  {
-                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.123.exe",
-                                   "sha256":  "f6bbee3fc8de5a87296d3b6224efbf0a10de9c0d13894cc8679ea8ea21a037f4"
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.126.exe",
+                                   "sha256":  "e0816a19dfbd1c7aecc89f44902779ba910f928cfdca01a70c74d72fc3e83126"
                                },
                    "android":  {
-                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-1.0.123.apk",
-                                   "sha256":  "29a5a01fc5d9ae917f652de3594e7a01598b6bda57551fa813f1b22895e93e90",
-                                   "version":  "1.0.123",
-                                   "minUpdaterVersion":  "1.0.117"
+                                   "url":  "https://nexadesk-signaling.papayasds.workers.dev/NexaDesk-1.0.126.apk",
+                                   "sha256":  "58de8fdcdd949f1162f9457455d58859bf2d7b067f6b1c66222b69bf999c8573",
+                                   "version":  "1.0.126",
+                                   "minUpdaterVersion":  "1.0.124"
                                }
                }
 }
