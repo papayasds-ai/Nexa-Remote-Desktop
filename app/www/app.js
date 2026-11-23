@@ -804,10 +804,20 @@ function applyWhenIdle(force, now) {                         // never interrupt 
     pend = null; $('#updBox').textContent = 'Update v' + la.version + ' was downloaded but did not take effect. Reinstall the app once (see README).';
     return;
   }
-  const p = pend; pend = null; S.set('lastApply', { version: p.version, t: Date.now() }); toast('Updating to v' + p.version + '…');
+  const p = pend; pend = null; toast('Updating to v' + p.version + '…');
   ulog('applying v' + p.version + (p.id ? ' (android bundle ' + p.id.slice(0, 8) + ')' : ' (windows)'));
   setTimeout(() => {
-    if (p.id && CU()) CU().set({ id: p.id }).catch(e => ulog('android activation failed: ' + (e && e.message || e)));
+    if (p.id && CU()) {
+      CU().set({ id: p.id }).then(() => {
+        S.set('lastApply', { version: p.version, t: Date.now() });
+        // The updater normally reloads on activation; explicitly reload as a fallback so the new bundle and version are shown.
+        setTimeout(() => { if (cmpv(window.NEXA_VERSION || '0.0.0', p.version) < 0) location.reload(); }, 1200);
+      }).catch(e => {
+        pend = p;
+        S.set('lastApply', null);
+        ulog('android activation failed: ' + (e && e.message || e));
+      });
+    }
     else if (window.nexa) window.nexa.otaApply();
   }, 700);
 }
@@ -924,13 +934,15 @@ async function handleNative(m, forceN) {
     let curA = ''; try { curA = (await CU().current()).native || ''; } catch (_) {}
     const link = $('#apkLink');
     if (NIP() && nat.android.sha256 && (!curA || cmpv(nat.version, curA) > 0)) {
-      link.hidden = true; const b = $('#installApk'); b.hidden = false; b.textContent = 'Update the app to v' + nat.version;
+      link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; link.hidden = false;
+      const b = $('#installApk'); b.hidden = false; b.textContent = 'Update the app to v' + nat.version;
       b.onclick = () => { if (host || view) return toast('Finish the current session first'); installApkNow(nat); };
       if (autoUpd() && apkAutoFor !== nat.version) { apkAutoFor = nat.version; whenIdle(() => installApkNow(nat)); }
       return;
     }
-    if (!curA || cmpv(nat.version, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; link.hidden = false; }
-    else link.hidden = true;
+    if (!curA || cmpv(nat.version, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; }
+    else { link.href = nat.android.url; link.textContent = 'Download the Android app (APK, v' + nat.version + ')'; }
+    link.hidden = false;
   }
 }
 function installNow() {
