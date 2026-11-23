@@ -11,6 +11,26 @@ public static class NX {
   [StructLayout(LayoutKind.Sequential)] public struct KI { public ushort vk, scan; public uint flags, time; public IntPtr extra; }
   [StructLayout(LayoutKind.Explicit)] public struct IU { [FieldOffset(0)] public MI mi; [FieldOffset(0)] public KI ki; }
   [StructLayout(LayoutKind.Sequential)] public struct IN { public uint type; public IU u; }
+  [DllImport("user32.dll")] public static extern short VkKeyScan(char ch);
+  [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint type);
+  [DllImport("user32.dll")] public static extern short GetKeyState(int vk);
+  // real key press WITH scan code (console windows such as cmd / PowerShell / Windows Terminal need it; keybd_event without a scan code is ignored by them)
+  public static void Key(byte vk, uint f) {
+    IN[] a = new IN[1];
+    a[0].type = 1; a[0].u.ki.vk = vk; a[0].u.ki.scan = (ushort)MapVirtualKey(vk, 0); a[0].u.ki.flags = f;
+    SendInput(1, a, Marshal.SizeOf(typeof(IN)));
+  }
+  // typed character: as a normal key press when the keyboard layout has it (works everywhere), otherwise as a Unicode character
+  public static void Char(ushort ch) {
+    short r = VkKeyScan((char)ch);
+    int sh = (r >> 8) & 0xFF;
+    bool caps = (GetKeyState(0x14) & 1) != 0;
+    if (r == -1 || ch < 32 || (sh & ~1) != 0 || (caps && char.IsLetter((char)ch))) { Unicode(ch); return; }
+    byte vk = (byte)(r & 0xFF);
+    if (sh == 1) Key(0x10, 0);
+    Key(vk, 0); Key(vk, 2);
+    if (sh == 1) Key(0x10, 2);
+  }
   public static void Unicode(ushort ch) {
     IN[] a = new IN[2];
     a[0].type = 1; a[0].u.ki.scan = ch; a[0].u.ki.flags = 4;
@@ -42,8 +62,8 @@ while ($true) {
       'D' { [NX]::mouse_event($btn[$p[1]][0], 0, 0, 0, [UIntPtr]::Zero) }
       'U' { [NX]::mouse_event($btn[$p[1]][1], 0, 0, 0, [UIntPtr]::Zero) }
       'W' { [NX]::mouse_event(0x800, 0, 0, [int]$p[1], [UIntPtr]::Zero) }
-      'K' { $f = 0; if ($p[2] -eq '0') { $f = 2 }; if ($p[3] -eq '1') { $f = $f -bor 1 }; [NX]::keybd_event([byte][int]$p[1], 0, $f, [UIntPtr]::Zero) }
-      'T' { [NX]::Unicode([uint16][int]$p[1]) }
+      'K' { $f = 0; if ($p[2] -eq '0') { $f = 2 }; if ($p[3] -eq '1') { $f = $f -bor 1 }; [NX]::Key([byte][int]$p[1], [uint32]$f) }
+      'T' { [NX]::Char([uint16][int]$p[1]) }
       'R' { [NX]::mouse_event(0x0001, [int]$p[1], [int]$p[2], 0, [UIntPtr]::Zero) }   # relative move (trackpad mode)
     }
   } catch { }
