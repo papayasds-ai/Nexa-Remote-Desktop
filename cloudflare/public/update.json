@@ -1,0 +1,28 @@
+{
+    "version":  "1.0.113",
+    "bundle":  "www-1.0.113.zip",
+    "sha256":  "1d98c28d614a853b5e4fd916c36469913ffd5c87620b352e02871da830d93573",
+    "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
+    "released":  "2026-11-23T17:19:35.8757756Z",
+    "mirrors":  {
+                    "web":  "https://raw.githubusercontent.com/papayasds-ai/Nexa-Remote-Desktop/HEAD/ota/",
+                    "app":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/"
+                },
+    "trust":  [
+                  "d90ea841dfdb9803",
+                  "047d1bba55ce3069"
+              ],
+    "keyId":  "",
+    "force":  false,
+    "native":  {
+                   "version":  "1.0.113",
+                   "windows":  {
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.113.exe",
+                                   "sha256":  "a1c2537e14e3777e9a9b28bfe289b089b9483d0ad89420e92ab0eade797d6d71"
+                               },
+                   "android":  {
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-1.0.113.apk",
+                                   "sha256":  "06d25a8f8ce9995c8fc37d1d81a5dca3573ea15036091c1aaf4ce65c48b304f0"
+                               }
+               }
+}
