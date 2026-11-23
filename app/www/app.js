@@ -889,6 +889,24 @@ async function installNativeNow(nat) {
   ulog('app installer v' + nat.version + ': ' + (r && r.ok ? 'started' : 'failed (' + ((r && r.why) || 'unknown') + ')'));
   if (!r || !r.ok) { nativePend = false; toast('App update failed: ' + ((r && r.why) || 'unknown')); }
 }
+// ---- Android: the app downloads the new APK itself (private cache, checked against the signed manifest), Android shows its update confirmation, nothing is left in Downloads ----
+let apkBusy = false, apkBound = false, apkAutoFor = '';
+const NIP = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NexaInstaller;
+async function installApkNow(nat) {
+  const NI = NIP(), box = $('#nativeBox'); if (!NI || apkBusy) return;
+  try {
+    if (!apkBound) {
+      apkBound = true;
+      NI.addListener('progress', p => { box.textContent = 'Downloading app update v' + nat.version + ' - ' + (p.total > 0 ? Math.round(p.got * 100 / p.total) + '%' : Math.round(p.got / 1048576) + ' MB'); });
+      NI.addListener('result', r => { apkBusy = false; box.textContent = r.success ? '' : 'App update did not finish: ' + (r.message || ('code ' + r.status)); });
+    }
+    const c = await NI.canInstall();
+    if (!c.allowed) { toast('Allow "Install unknown apps" for NexaDesk, come back and press Update again'); await NI.openSettings(); return; }
+    apkBusy = true; box.textContent = 'Downloading app update v' + nat.version + ' ...';
+    await NI.install({ url: nat.android.url, sha256: nat.android.sha256 });
+    box.textContent = 'Confirm the update in the Android window.';
+  } catch (e) { apkBusy = false; box.textContent = ''; toast('App update failed: ' + ((e && e.message) || e)); }
+}
 async function handleNative(m, forceN) {
   const nat = m.native; if (!nat) return;
   if (nat.windows && window.nexa && window.nexa.nativeInstall && window.nexa.nativeVersion) {
@@ -905,6 +923,12 @@ async function handleNative(m, forceN) {
   if (nat.android && window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'android') {
     let curA = ''; try { curA = (await CU().current()).native || ''; } catch (_) {}
     const link = $('#apkLink');
+    if (NIP() && nat.android.sha256 && (!curA || cmpv(nat.version, curA) > 0)) {
+      link.hidden = true; const b = $('#installApk'); b.hidden = false; b.textContent = 'Update the app to v' + nat.version;
+      b.onclick = () => { if (host || view) return toast('Finish the current session first'); installApkNow(nat); };
+      if (autoUpd() && apkAutoFor !== nat.version) { apkAutoFor = nat.version; whenIdle(() => installApkNow(nat)); }
+      return;
+    }
     if (!curA || cmpv(nat.version, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; link.hidden = false; }
     else link.hidden = true;
   }
@@ -937,7 +961,7 @@ async function checkOta(manual, push) {
     } else if (manual && !m.native) toast('You are on the latest version (v' + VER + ')');
     // the installed package (EXE / APK) is checked on every check: a page reload after a web update would otherwise cancel it forever
     await handleNative(m, m.force === true);
-    if (manual && !(ok && cmpv(m.version, VER) > 0) && m.native && !nativePend && $('#installNative').hidden && $('#apkLink').hidden) toast('You are on the latest version (v' + VER + ')');
+    if (manual && !(ok && cmpv(m.version, VER) > 0) && m.native && !nativePend && $('#installNative').hidden && $('#apkLink').hidden && $('#installApk').hidden) toast('You are on the latest version (v' + VER + ')');
   } catch (e) {
     ulog('check failed: ' + (e && e.message || e));
     if (e.message === 'signature') {

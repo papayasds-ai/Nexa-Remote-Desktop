@@ -57,6 +57,25 @@ function Update-AndroidToolchain([string]$androidDir, [string]$appVer) {
   }
 }
 
+# In-app APK updates: adds the NexaInstaller plugin (assets\android\java\NexaInstallerPlugin.java) to the generated project, registers it in MainActivity
+# and requests the permission Android needs to install APKs. Idempotent.
+function Install-NexaInstaller([string]$androidDir, [string]$assetsJava) {
+  $pkgDir = Join-Path $androidDir 'app\src\main\java\com\nexadesk\app'
+  if (-not (Test-Path (Join-Path $assetsJava 'NexaInstallerPlugin.java'))) { Write-Host '  NexaInstaller plugin source not found - APK updates stay manual' -ForegroundColor Yellow; return }
+  New-Item -ItemType Directory -Force $pkgDir | Out-Null
+  Copy-Item (Join-Path $assetsJava 'NexaInstallerPlugin.java') $pkgDir -Force
+  $main = "package com.nexadesk.app;`r`n`r`nimport android.os.Bundle;`r`nimport com.getcapacitor.BridgeActivity;`r`n`r`npublic class MainActivity extends BridgeActivity {`r`n  @Override`r`n  public void onCreate(Bundle savedInstanceState) {`r`n    registerPlugin(NexaInstallerPlugin.class);`r`n    super.onCreate(savedInstanceState);`r`n  }`r`n}`r`n"
+  Write-Utf8NoBom (Join-Path $pkgDir 'MainActivity.java') $main
+  $mf = Join-Path $androidDir 'app\src\main\AndroidManifest.xml'
+  $t = [IO.File]::ReadAllText($mf)
+  if ($t -notmatch 'REQUEST_INSTALL_PACKAGES') {
+    $perm = '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />' + "`r`n`r`n    "
+    $t = ([regex]'<application').Replace($t, ($perm + '<application'), 1)
+    Write-Utf8NoBom $mf $t
+  }
+  Write-Host '  in-app APK update plugin installed' -ForegroundColor DarkGray
+}
+
 # Makes sure the SDK platform the project compiles against is installed; installs it with sdkmanager if not.
 function Ensure-AndroidPlatform([string]$sdkRoot, [int]$level) {
   $plat = Join-Path $sdkRoot "platforms\android-$level"
@@ -133,6 +152,7 @@ try {
   Write-Host 'Checking Android project toolchain...' -ForegroundColor Cyan
   Update-AndroidToolchain (Join-Path $app 'android') $ver
   Set-AndroidIcons (Join-Path $app 'android') (Join-Path $root 'assets\android\res')
+  Install-NexaInstaller (Join-Path $app 'android') (Join-Path $root 'assets\android\java')
   Ensure-AndroidPlatform $sdk $TargetSdk
 
   ("sdk.dir=" + ($sdk -replace '\\', '/')) | Set-Content 'android\local.properties' -Encoding ASCII
