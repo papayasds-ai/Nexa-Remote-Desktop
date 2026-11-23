@@ -311,7 +311,9 @@ ipcMain.handle('nx-admin-input', async (e, o) => {
     if (ok) { adminOn = false; try { adminSock && adminSock.destroy(); } catch (_) {} slog('admin input disabled'); }
   }
   const task = await runOk('schtasks.exe', ['/Query', '/TN', INPUT_TASK]);
-  return { ok: true, task, connected: !!adminSock, elevated: await elevatedP };
+  let stale = false;   // the elevated copy of the helper (ProgramData) is only refreshed by "enable", so an app update can leave an old one behind
+  try { if (task) { const h = f => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex'); stale = h(helperPath()) !== h(PD_HELPER()); } } catch (_) {}
+  return { ok: true, task, connected: !!adminSock, elevated: await elevatedP, stale };
 });
 ipcMain.on('nx-input', (e, cmd) => {
   if (!win || e.sender !== win.webContents) return;

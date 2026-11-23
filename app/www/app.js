@@ -703,8 +703,9 @@ if (canHost && window.nexa.admin) {
     $('#btnElevate').hidden = r.elevated; $('#rowAdminAuto').hidden = !(r.elevated && r.packaged); $('#optAdminAuto').checked = !!r.task;
   };
   if (window.nexa.adminInput) {
-    const refreshInp = async () => { const r = await window.nexa.adminInput({}); if (!r || !r.ok) return; $('#adminInputState').textContent = r.task ? 'Admin control is ON' + (r.connected ? ' (helper running).' : ' (the helper starts when needed).') : 'Admin control is off.'; $('#optAdminInput').checked = !!r.task; };
+    const refreshInp = async () => { const r = await window.nexa.adminInput({}); if (!r || !r.ok) return; if (r.task && r.stale) toast('Admin control has an update - open Settings and press "Update admin control".'); $('#btnAdminUpd').hidden = !(r.task && r.stale); $('#adminInputState').textContent = r.task ? 'Admin control is ON' + (r.connected ? ' (helper running).' : ' (the helper starts when needed).') : 'Admin control is off.'; $('#optAdminInput').checked = !!r.task; };
     $('#optAdminInput').onchange = async e => { toast('Windows will ask for permission...'); const r = await window.nexa.adminInput({ enable: e.target.checked }); if (!r || !r.ok) { e.target.checked = !e.target.checked; toast('Not changed (cancelled?)'); } else toast(e.target.checked ? 'Admin control enabled' : 'Admin control disabled'); refreshInp(); };
+    $('#btnAdminUpd').onclick = async () => { toast('Windows will ask for permission...'); const r = await window.nexa.adminInput({ enable: true }); toast(r && r.ok ? 'Admin control updated' : 'Not updated (cancelled?)'); refreshInp(); };
     refreshInp(); $('#adminInputRow').hidden = false;
   }
   $('#btnElevate').onclick = async () => { toast('Windows will ask for permission…'); const r = await window.nexa.admin({ relaunch: true }); if (!r || !r.ok) toast('Cancelled: NexaDesk keeps running normally'); };
