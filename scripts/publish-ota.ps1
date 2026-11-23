@@ -102,11 +102,13 @@ if (($haveSetup -or $haveApk) -and ((Test-Path $relFile) -or $useGh)) {
     if (-not $item[2]) { continue }
     $file = Join-Path $outDir $item[1]
     $h = if ($CloudSha -and $item[0] -eq 'windows') { $CloudSha.ToLower() } else { (Get-FileHash $file -Algorithm SHA256).Hash.ToLower() }
-    if (-not (Test-Path $relFile)) { $native[$item[0]] = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }; continue }   # GitHub release: uploaded by the release step below
+    $platformInfo = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }
+    if ($item[0] -eq 'android') { $platformInfo.version = $ver; $platformInfo.minUpdaterVersion = '1.0.117' }
+    if (-not (Test-Path $relFile)) { $native[$item[0]] = $platformInfo; continue }   # GitHub release: uploaded by the release step below
     Push-Location (Join-Path $root 'cloudflare')
     try { & npx wrangler r2 object put "nexadesk-releases/$($item[1])" --file $file --remote; $code = $LASTEXITCODE } finally { Pop-Location }
     if ($code) { throw "Upload of $($item[1]) to the release host failed" }
-    $native[$item[0]] = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }
+    $native[$item[0]] = $platformInfo
   }
 }
 if (-not $native -and $liveNow -and $liveNow.native) { $native = $liveNow.native; Write-Host "Keeping the app-installer info of v$($native.version) in the manifest (no new installers in this run)." -ForegroundColor DarkGray }

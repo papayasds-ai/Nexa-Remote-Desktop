@@ -670,7 +670,7 @@ $('#btnEnd').onclick = () => endView(true);
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   ['home', 'sec', 'set'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
-  if (wantInstall && !inSettings()) { wantInstall = false; applyWhenIdle(true); }
+  if (!inSettings() && (wantInstall || (pend && autoUpd()))) { wantInstall = false; applyWhenIdle(true); }
 });
 const copy = async (txt, ok) => { try { await navigator.clipboard.writeText(txt); toast(ok); } catch (_) { toast('Copy failed'); } };
 $('#copyId').onclick = () => myId && copy(myId, 'ID copied');
@@ -1057,25 +1057,28 @@ async function handleNative(m, forceN) {
   }
   if (nat.android && window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'android') {
     let curA = ''; try { curA = (await CU().current()).native || ''; } catch (_) {}
+    const androidVersion = nat.android.version || nat.version;
+    const minUpdaterVersion = nat.android.minUpdaterVersion || '';
+    const canAutoInstallApk = !minUpdaterVersion || (curA && cmpv(curA, minUpdaterVersion) >= 0);
     const link = $('#apkLink');
-    if (NIP() && nat.android.sha256 && (!curA || cmpv(nat.version, curA) > 0)) {
-      link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; link.hidden = false;
-      const b = $('#installApk'); b.hidden = false; b.textContent = 'Update the app to v' + nat.version;
+    if (NIP() && nat.android.sha256 && (!curA || cmpv(androidVersion, curA) > 0)) {
+      link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + androidVersion + ')'; link.hidden = false;
+      const b = $('#installApk'); b.hidden = !canAutoInstallApk; b.textContent = 'Update the app to v' + androidVersion;
       b.onclick = () => { if (host || view) return toast('Finish the current session first'); installApkNow(nat); };
-      if (autoUpd() && apkAutoFor !== nat.version) { apkAutoFor = nat.version; whenIdle(() => installApkNow(nat)); }
+      if (!canAutoInstallApk) $('#nativeBox').textContent = 'Install this APK once from the download link. Automatic APK updates will work after this build is installed.';
+      if (autoUpd() && canAutoInstallApk && apkAutoFor !== androidVersion) { apkAutoFor = androidVersion; whenIdle(() => installApkNow(nat)); }
       return;
     }
-    if (!curA || cmpv(nat.version, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + nat.version + ')'; }
-    else { link.href = nat.android.url; link.textContent = 'Download the Android app (APK, v' + nat.version + ')'; }
+    if (!curA || cmpv(androidVersion, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + androidVersion + ')'; }
+    else { link.href = nat.android.url; link.textContent = 'Download the Android app (APK, v' + androidVersion + ')'; }
     link.hidden = false;
   }
 }
 function installNow() {
   if (!pend) return toast('No update is ready');
   if (host || view) return toast('Finish the current session first');
-  wantInstall = true;
-  if (inSettings()) return toast('The update installs when you leave Settings');
-  wantInstall = false; applyWhenIdle(true);
+  wantInstall = false;
+  applyWhenIdle(true, true);
 }
 // checkOta(manual): user pressed "Check"   push: server announced a new release   neither: automatic check
 async function checkOta(manual, push) {
