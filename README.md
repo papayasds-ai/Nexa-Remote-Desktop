@@ -9,8 +9,8 @@ Components
 
 ## Quick start (Windows PC)
 1. Install Node.js 22.12+ LTS (the build tools need it), Git for Windows, and (for the APK) JDK 17 + Android Studio SDK with `ANDROID_HOME` set.
-2. Double-click `NexaDesk.bat` -> **1) FULL RELEASE**. First run it logs in to Cloudflare (browser), creates the server, builds
-   `output\NexaDesk-Setup.exe` + `NexaDesk.apk`, pushes to GitHub (a sign-in window may appear once) and pings devices.
+2. Double-click `NexaDesk.bat` -> **1) FULL FORCED RELEASE**. First run it logs in to Cloudflare (browser), creates the server, builds
+   `output\NexaDesk-Setup.exe` + `NexaDesk.apk`, publishes a mandatory update and pings devices. Android may still show its system install confirmation.
 3. Install the EXE / APK. ID and password are there immediately - no server to run, nothing to type.
 4. Later: **2) QUICK UPDATE** for UI/logic changes (no rebuild, all devices update instantly), **1)** when native parts change.
 
@@ -89,7 +89,7 @@ system privileges. That is a deliberate security decision, not something the app
 ## Commands (NexaDesk.bat)
 | Command | What it does |
 |---|---|
-| `release` | full release: server + EXE + APK + GitHub + instant update |
+| `release` | full forced release: server + EXE + APK + publish a mandatory update to devices |
 | `update [-Force] [-NoBump] [-WithPortable] [-RetryUpload] [-RecoveryKey f] [-AppKey id]` | quick web-layer update |
 | `force` | quick update every device must install |
 | `windows` / `android` | build the EXE / APK only |

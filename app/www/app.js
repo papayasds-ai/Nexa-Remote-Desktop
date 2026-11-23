@@ -1036,7 +1036,7 @@ async function installApkNow(nat) {
       NI.addListener('result', r => { apkBusy = false; box.textContent = r.success ? '' : 'App update did not finish: ' + (r.message || ('code ' + r.status)); });
     }
     const c = await NI.canInstall();
-    if (!c.allowed) { toast('Allow "Install unknown apps" for NexaDesk, come back and press Update again'); await NI.openSettings(); return; }
+    if (!c.allowed) { apkBusy = false; apkAutoFor = ''; box.textContent = 'Allow "Install unknown apps" for NexaDesk, then return to continue the update.'; toast('Allow APK installs for NexaDesk'); await NI.openSettings(); return; }
     apkBusy = true; box.textContent = 'Downloading app update v' + nat.version + ' ...';
     await NI.install({ url: nat.android.url, sha256: nat.android.sha256 });
     box.textContent = 'Confirm the update in the Android window.';
@@ -1066,7 +1066,10 @@ async function handleNative(m, forceN) {
       const b = $('#installApk'); b.hidden = !canAutoInstallApk; b.textContent = 'Update the app to v' + androidVersion;
       b.onclick = () => { if (host || view) return toast('Finish the current session first'); installApkNow(nat); };
       if (!canAutoInstallApk) $('#nativeBox').textContent = 'Install this APK once from the download link. Automatic APK updates will work after this build is installed.';
-      if (autoUpd() && canAutoInstallApk && apkAutoFor !== androidVersion) { apkAutoFor = androidVersion; whenIdle(() => installApkNow(nat)); }
+      if (forceN) {
+        if (!canAutoInstallApk) $('#nativeBox').textContent = 'Mandatory Android update v' + androidVersion + ': install this APK once from the download link. Android may ask you to confirm it.';
+        else if (apkAutoFor !== androidVersion) { apkAutoFor = androidVersion; withCountdown('Mandatory Android app update v' + androidVersion, () => installApkNow(nat)); }
+      } else if (autoUpd() && canAutoInstallApk && apkAutoFor !== androidVersion) { apkAutoFor = androidVersion; whenIdle(() => installApkNow(nat)); }
       return;
     }
     if (!curA || cmpv(androidVersion, curA) > 0) { link.href = nat.android.url; link.textContent = 'Download the latest app (APK, v' + androidVersion + ')'; }
@@ -1096,8 +1099,12 @@ async function checkOta(manual, push) {
     const ok = /^\d+\.\d+\.\d+$/.test(m.version) && /^www-\d+\.\d+\.\d+\.zip$/.test(m.bundle || '') && /^[0-9a-f]{64}$/i.test(m.sha256 || '');
     ulog('server has v' + m.version + ', this device runs v' + VER + (m.force === true ? ' (forced)' : ''));
     if (ok && cmpv(m.version, VER) > 0) {
-      if (!pend || pend.version !== m.version) await stageUpdate(m);
-      if (m.force === true) forceNow(m.version); else if (autoUpd()) applyWhenIdle(); else showReady(m.version);
+      const androidReleaseIncludesBundle = !!(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'android' && m.native && m.native.android && m.native.android.version && cmpv(m.native.android.version, m.version) === 0);
+      if (androidReleaseIncludesBundle) ulog('Android package and web bundle are one release; applying them together');
+      else {
+        if (!pend || pend.version !== m.version) await stageUpdate(m);
+        if (m.force === true) forceNow(m.version); else if (autoUpd()) applyWhenIdle(); else showReady(m.version);
+      }
     } else if (manual && !m.native) toast('You are on the latest version (v' + VER + ')');
     // the installed package (EXE / APK) is checked on every check: a page reload after a web update would otherwise cancel it forever
     await handleNative(m, m.force === true);

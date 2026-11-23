@@ -1,7 +1,7 @@
 {
   "name": "nexadesk",
   "productName": "NexaDesk",
-  "version": "1.0.117",
+  "version": "1.0.125",
   "description": "NexaDesk secure remote desktop",
   "author": "NexaDesk",
   "main": "main.js",

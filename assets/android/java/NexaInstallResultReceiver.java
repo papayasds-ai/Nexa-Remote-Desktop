@@ -21,10 +21,23 @@ public class NexaInstallResultReceiver extends BroadcastReceiver {
       }
       if (confirmation != null) {
         confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        context.startActivity(confirmation);
+        try {
+          context.startActivity(confirmation);
+        } catch (Exception e) {
+          Intent failed = new Intent(intent);
+          failed.putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+          failed.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE, "Could not open Android install confirmation");
+          NexaInstallerPlugin.onInstallResult(failed);
+        }
+      } else {
+        Intent failed = new Intent(intent);
+        failed.putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+        failed.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE, "Android did not provide an install confirmation");
+        NexaInstallerPlugin.onInstallResult(failed);
       }
       return;
     }
+    NexaInstallerPlugin.onInstallResult(intent);
     if (status != PackageInstaller.STATUS_SUCCESS) return;
 
     Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());

@@ -1,10 +1,8 @@
 package com.nexadesk.app;
 
 import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.PackageInstaller;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -13,7 +11,6 @@ import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.provider.Settings;
 import android.util.Base64;
-import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -43,8 +40,27 @@ public class NexaInstallerPlugin extends Plugin {
   private static final String ACTION = "com.nexadesk.app.INSTALL_RESULT";
   private static final String STORE = "nexadesk_secure";
   private static final String KEY_ALIAS = "nexadesk_secure_store_v1";
-  private BroadcastReceiver receiver;
+  private static volatile NexaInstallerPlugin activePlugin;
   private volatile boolean busy = false;
+
+  @Override
+  public void load() {
+    super.load();
+    activePlugin = this;
+  }
+
+  static void onInstallResult(Intent intent) {
+    NexaInstallerPlugin plugin = activePlugin;
+    if (plugin == null) return;
+    int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999);
+    plugin.busy = false;
+    JSObject r = new JSObject();
+    r.put("status", status);
+    String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+    r.put("message", msg == null ? "" : msg);
+    r.put("success", status == PackageInstaller.STATUS_SUCCESS);
+    plugin.notifyListeners("result", r);
+  }
 
   private boolean allowed() {
     return Build.VERSION.SDK_INT < 26 || getContext().getPackageManager().canRequestPackageInstalls();
@@ -151,33 +167,6 @@ public class NexaInstallerPlugin extends Plugin {
     }
   }
 
-  private void ensureReceiver() {
-    if (receiver != null) return;
-    receiver = new BroadcastReceiver() {
-      @Override
-      @SuppressWarnings("deprecation")
-      public void onReceive(Context c, Intent intent) {
-        int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999);
-        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-          Intent confirm = (Intent) intent.getParcelableExtra(Intent.EXTRA_INTENT);
-          if (confirm != null) {
-            confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try { c.startActivity(confirm); } catch (Exception ignored) { }
-          }
-          return;
-        }
-        busy = false;
-        JSObject r = new JSObject();
-        r.put("status", status);
-        String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-        r.put("message", msg == null ? "" : msg);
-        r.put("success", status == PackageInstaller.STATUS_SUCCESS);
-        notifyListeners("result", r);
-      }
-    };
-    ContextCompat.registerReceiver(getContext(), receiver, new IntentFilter(ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
-  }
-
   private void progress(long got, long total) {
     JSObject r = new JSObject();
     r.put("got", got);
@@ -193,7 +182,6 @@ public class NexaInstallerPlugin extends Plugin {
     if (!allowed()) { call.reject("permission"); return; }
     if (busy) { call.reject("busy"); return; }
     busy = true;
-    ensureReceiver();
     final Context ctx = getContext();
     new Thread(new Runnable() {
       @Override
