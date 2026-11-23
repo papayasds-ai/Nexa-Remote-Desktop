@@ -6,9 +6,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageInstaller;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.provider.Settings;
+import android.util.Base64;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -23,6 +27,11 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
+import java.security.KeyStore;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 
 /**
  * In-app update of the APK: downloads the new APK into the app's private cache (no file is left in Downloads), checks its SHA-256 against the
@@ -32,11 +41,80 @@ import java.security.MessageDigest;
 @CapacitorPlugin(name = "NexaInstaller")
 public class NexaInstallerPlugin extends Plugin {
   private static final String ACTION = "com.nexadesk.app.INSTALL_RESULT";
+  private static final String STORE = "nexadesk_secure";
+  private static final String KEY_ALIAS = "nexadesk_secure_store_v1";
   private BroadcastReceiver receiver;
   private volatile boolean busy = false;
 
   private boolean allowed() {
     return Build.VERSION.SDK_INT < 26 || getContext().getPackageManager().canRequestPackageInstalls();
+  }
+
+  private SecretKey secureKey() throws Exception {
+    KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
+    ks.load(null);
+    if (ks.containsAlias(KEY_ALIAS)) return (SecretKey) ks.getKey(KEY_ALIAS, null);
+    KeyGenerator gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+    gen.init(new KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+      .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+      .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+      .setRandomizedEncryptionRequired(true)
+      .build());
+    return gen.generateKey();
+  }
+
+  private String readSecure(String name) throws Exception {
+    SharedPreferences prefs = getContext().getSharedPreferences(STORE, Context.MODE_PRIVATE);
+    String encoded = prefs.getString("v_" + name, "");
+    if (encoded.isEmpty()) return "";
+    byte[] all = Base64.decode(encoded, Base64.NO_WRAP);
+    byte[] iv = java.util.Arrays.copyOfRange(all, 0, 12);
+    byte[] ciphertext = java.util.Arrays.copyOfRange(all, 12, all.length);
+    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+    cipher.init(Cipher.DECRYPT_MODE, secureKey(), new GCMParameterSpec(128, iv));
+    return new String(cipher.doFinal(ciphertext), java.nio.charset.StandardCharsets.UTF_8);
+  }
+
+  private void writeSecure(String name, String value) throws Exception {
+    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+    cipher.init(Cipher.ENCRYPT_MODE, secureKey());
+    byte[] iv = cipher.getIV();
+    byte[] ciphertext = cipher.doFinal(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    byte[] all = new byte[iv.length + ciphertext.length];
+    System.arraycopy(iv, 0, all, 0, iv.length);
+    System.arraycopy(ciphertext, 0, all, iv.length, ciphertext.length);
+    boolean saved = getContext().getSharedPreferences(STORE, Context.MODE_PRIVATE).edit()
+      .putString("v_" + name, Base64.encodeToString(all, Base64.NO_WRAP)).commit();
+    if (!saved) throw new Exception("secure storage write failed");
+  }
+
+  private boolean validSecureName(String name) {
+    return "deviceKey".equals(name) || "permanentPassword".equals(name) || "trustedPeers".equals(name);
+  }
+
+  @PluginMethod
+  public void getSecure(PluginCall call) {
+    String name = call.getString("key");
+    if (name == null) name = "";
+    if (!validSecureName(name)) { call.reject("unsupported secure value"); return; }
+    try {
+      JSObject r = new JSObject();
+      r.put("value", readSecure(name));
+      call.resolve(r);
+    } catch (Exception e) { call.reject("secure storage unavailable", e); }
+  }
+
+  @PluginMethod
+  public void setSecure(PluginCall call) {
+    String name = call.getString("key"), value = call.getString("value");
+    if (name == null) name = "";
+    if (value == null) value = "";
+    int limit = "trustedPeers".equals(name) ? 12000 : 256;
+    if (!validSecureName(name) || value.length() > limit) { call.reject("unsupported secure value"); return; }
+    try {
+      writeSecure(name, value);
+      call.resolve();
+    } catch (Exception e) { call.reject("secure storage unavailable", e); }
   }
 
   @PluginMethod

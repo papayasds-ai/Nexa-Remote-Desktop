@@ -16,6 +16,7 @@ const S = {
   set(k, v) { try { localStorage.setItem('nx_' + k, JSON.stringify(v)); } catch (_) {} }
 };
 const fmtId = id => id ? id.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3') : '— — —';
+const cleanPeerIds = value => Array.isArray(value) ? value.filter(id => typeof id === 'string' && /^\d{9}$/.test(id)).slice(0, 100) : [];
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 3200); }
 
 // ---------- crypto helpers (HMAC-SHA256 challenge/response, mutual authentication) ----------
@@ -34,12 +35,23 @@ async function sas(pc) { // short code both sides can read aloud to verify the D
 
 // ---------- state ----------
 const canHost = !!(window.nexa && window.nexa.canHost);
-let deviceKey = S.get('devkey'); if (!deviceKey) { deviceKey = rnd(32); S.set('devkey', deviceKey); }
+let deviceKey = '';
+let trustedPeers = [];
 let myId = null, iceServers = [], ws = null, retry = null, icePing = null;
 let pw = null; const invites = new Map();       // code -> expiry
 const pendingAuth = new Map(), fails = new Map(), gfail = { n: 0, t0: 0, until: 0 };
 let host = null, view = null;
 let closing = false;                              // the page is unloading (app closing or an update reload): no side effects such as locking the PC
+
+function renderActiveSession() {
+  const box = $('#activeSession'), stop = $('#disconnectSession'); if (!box || !stop) return;
+  if (host) {
+    const elapsed = host.t0 ? Math.floor((Date.now() - host.t0) / 1000) : 0;
+    box.textContent = 'Sharing your screen with ' + fmtId(host.peer) + ' · ' + Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's · control ' + (host.perm.control ? 'on' : 'off') + ' · clipboard ' + (host.perm.clip ? 'on' : 'off') + ' · files ' + (host.perm.files ? 'on' : 'off');
+  } else if (view) box.textContent = 'Controlling ' + fmtId(view.to) + (view.st === 'live' ? ' · connected' : ' · connecting');
+  else box.textContent = 'No active session.';
+  stop.hidden = !host && !view;
+}
 
 function log(role, peer, ev) {
   const l = S.get('log', []); l.unshift({ ts: new Date().toISOString().replace('T', ' ').slice(0, 19), role, peer, ev }); S.set('log', l.slice(0, 200)); renderLog();
@@ -51,14 +63,83 @@ function renderLog() {
 
 // ---------- password / invites ----------
 let permPwCache = '';
+function androidSecureStore() { return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NexaInstaller; }
+async function secureValue(key) {
+  if (key === 'deviceKey' && window.nexa && window.nexa.identity && window.nexa.identity.available) return await window.nexa.identity.get();
+  if (key === 'permanentPassword' && window.nexa && window.nexa.secret && window.nexa.secret.available) return await window.nexa.secret.get();
+  if (key === 'trustedPeers' && window.nexa && window.nexa.security) return await window.nexa.security.getTrusted();
+  const p = androidSecureStore();
+  if (p && p.getSecure) { const r = await p.getSecure({ key }); return r && r.value || ''; }
+  return '';
+}
+async function setSecureValue(key, value) {
+  if (key === 'deviceKey' && window.nexa && window.nexa.identity && window.nexa.identity.available) return !!(await window.nexa.identity.set(value));
+  if (key === 'permanentPassword' && window.nexa && window.nexa.secret && window.nexa.secret.available) return !!(await window.nexa.secret.set(value));
+  if (key === 'trustedPeers' && window.nexa && window.nexa.security) return !!(await window.nexa.security.setTrusted(value));
+  const p = androidSecureStore();
+  if (p && p.setSecure) { await p.setSecure({ key, value }); return true; }
+  return false;
+}
+async function loadDeviceKey() {
+  const old = S.get('devkey', '');
+  if (window.nexa && window.nexa.identity && window.nexa.identity.available || androidSecureStore()) {
+    try {
+      let key = await secureValue('deviceKey');
+      if (!/^[a-f0-9]{64}$/i.test(key)) {
+        key = /^[a-f0-9]{64}$/i.test(old) ? old : rnd(32);
+        if (!(await setSecureValue('deviceKey', key))) throw new Error('write failed');
+      }
+      localStorage.removeItem('nx_devkey');
+      return key;
+    } catch (_) { toast('Secure device storage is unavailable; using the existing local device identity'); }
+  }
+  const key = /^[a-f0-9]{64}$/i.test(old) ? old : rnd(32);
+  S.set('devkey', key);
+  return key;
+}
+async function loadTrustedPeers() {
+  const legacy = cleanPeerIds(S.get('trustedPeers', []));
+  if (window.nexa && window.nexa.security || androidSecureStore()) {
+    try {
+      const raw = await secureValue('trustedPeers');
+      if (raw) trustedPeers = JSON.parse(raw);
+      else if (legacy.length) {
+        trustedPeers = legacy;
+        if (!(await setSecureValue('trustedPeers', JSON.stringify(trustedPeers)))) throw new Error('write failed');
+      }
+      localStorage.removeItem('nx_trustedPeers');
+    } catch (_) { trustedPeers = legacy; toast('Could not load trusted device approvals'); }
+  } else trustedPeers = legacy;
+  trustedPeers = cleanPeerIds(trustedPeers);
+}
+async function saveTrustedPeers(list) {
+  const clean = cleanPeerIds(list);
+  if (window.nexa && window.nexa.security || androidSecureStore()) {
+    try { if (!(await setSecureValue('trustedPeers', JSON.stringify(clean)))) return false; localStorage.removeItem('nx_trustedPeers'); }
+    catch (_) { return false; }
+  } else S.set('trustedPeers', clean);
+  trustedPeers = clean;
+  renderTrustedDevices();
+  return true;
+}
+async function saveDeviceKey(key) {
+  if (window.nexa && window.nexa.identity && window.nexa.identity.available || androidSecureStore()) {
+    try { if (await setSecureValue('deviceKey', key)) { localStorage.removeItem('nx_devkey'); return true; } } catch (_) {}
+  }
+  S.set('devkey', key);
+  return true;
+}
 async function loadPermPw() {
-  const sec = window.nexa && window.nexa.secret && window.nexa.secret.available ? window.nexa.secret : null;
-  if (sec) {
-    permPwCache = (await sec.get()) || '';
-    const old = S.get('permpw', '');                                  // migrate an older plain-text copy
-    if (old && !permPwCache) { permPwCache = old; await sec.set(old); }
-    if (old) localStorage.removeItem('nx_permpw');
-  } else permPwCache = S.get('permpw', '') || '';
+  const old = S.get('permpw', '');
+  if (window.nexa && window.nexa.secret && window.nexa.secret.available || androidSecureStore()) {
+    try {
+      permPwCache = (await secureValue('permanentPassword')) || '';
+      if (old && !permPwCache) { if (!(await setSecureValue('permanentPassword', old))) throw new Error('write failed'); permPwCache = old; }
+      if (old) localStorage.removeItem('nx_permpw');
+      return;
+    } catch (_) { toast('Secure password storage is unavailable'); }
+  }
+  permPwCache = old || '';
 }
 function newPw() {
   const perm = permPwCache;
@@ -72,6 +153,7 @@ const send = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function setStatus(txt, cls) { const s = $('#status'); s.className = 'status ' + (cls || ''); s.querySelector('span').textContent = txt; }
 function connectWS() {
   clearTimeout(retry);
+  if (!deviceKey) { setStatus('Preparing secure device identity…'); return; }
   const url = S.get('server', window.NEXA_DEFAULT_SERVER || '');
   if (!url) { setStatus('No server set (Settings)', 'bad'); return; }
   try { if (ws) { ws.onclose = null; ws.close(); } } catch (_) {}
@@ -90,7 +172,7 @@ async function onMsg(m) {
     case 'ota': checkOta(false, true); break;   // server says a new release was just published
     case 'ice': iceServers = m.ice || iceServers; if (icePing) { icePing(); icePing = null; } break;   // fresh TURN credentials
     case 'welcome': myId = m.id; S.set('lastId', myId); iceServers = m.ice || []; $('#myId').textContent = fmtId(myId); setStatus('Ready – secure connection', 'ok'); break;
-    case 'idtaken': deviceKey = rnd(32); S.set('devkey', deviceKey); send({ t: 'hello', key: deviceKey }); break;
+    case 'idtaken': deviceKey = rnd(32); await saveDeviceKey(deviceKey); send({ t: 'hello', key: deviceKey }); break;
     case 'req': await onReq(m.from); break;
     case 'chal': await onChal(m.from, m.nonce); break;
     case 'auth': await onAuth(m.from, m.mac); break;
@@ -127,19 +209,33 @@ async function onAuth(from, mac) {
   }
   fails.delete(from);
   let perm;
-  if (kind === 'password' && S.get('unattended', false)) perm = { control: S.get('defControl', true), clip: S.get('defClip', true), files: S.get('defFiles', true) };
-  else perm = await askConsent(from);
+  const unattendedPassword = kind === 'password' && S.get('unattended', false);
+  const knownDevice = trustedPeers.includes(String(from));
+  if (unattendedPassword && (knownDevice || !S.get('approveNewDevice', true))) {
+    perm = { control: S.get('defControl', true), clip: S.get('defClip', true), files: S.get('defFiles', true) };
+  } else {
+    if (unattendedPassword) log('host', from, 'new device needs approval');
+    perm = await askConsent(from, { trust: unattendedPassword });
+    if (perm && perm.trust) {
+      const list = trustedPeers.filter(id => id !== String(from));
+      list.unshift(String(from));
+      if (await saveTrustedPeers(list)) log('host', from, 'device trusted for unattended access');
+      else toast('Could not save device trust; approval is required next time');
+    }
+  }
   if (!perm) { log('host', from, 'denied by user'); return send({ t: 'deny', to: from, reason: 'The user declined the request.' }); }
   try { await startHost(from, secret, perm); } catch (e) { console.error(e); toast('Could not start screen sharing: ' + ((e && (e.name + ' ' + e.message)) || e)); if (e && e.name === 'NotReadableError') toast('Screen capture failed. If NexaDesk runs as administrator, restart it normally and use Settings > Admin control instead.');
   try { window.nexa && window.nexa.log && window.nexa.log('startHost failed: ' + (e && (e.name + ' ' + e.message))); } catch (_) {} send({ t: 'deny', to: from, reason: 'Host could not capture the screen.' }); endHost(false); }
 }
-function askConsent(from) {
+function askConsent(from, options = {}) {
   return new Promise(res => {
     $('#mdId').textContent = fmtId(from); $('#mdCtl').checked = S.get('defControl', true); $('#mdClip').checked = S.get('defClip', true); $('#mdFiles').checked = S.get('defFiles', true);
+    $('#mdTitle').textContent = options.trust ? 'New device approval' : 'Remote access request';
+    $('#mdTrustRow').hidden = !options.trust; $('#mdTrust').checked = false;
     $('#modal').hidden = false; try { window.nexa && window.nexa.focus(); } catch (_) {}
     const done = v => { $('#modal').hidden = true; clearTimeout(t); res(v); };
     const t = setTimeout(() => done(null), 30000);
-    $('#mdYes').onclick = () => done({ control: $('#mdCtl').checked, clip: $('#mdClip').checked, files: $('#mdFiles').checked });
+    $('#mdYes').onclick = () => done({ control: $('#mdCtl').checked, clip: $('#mdClip').checked, files: $('#mdFiles').checked, trust: options.trust && $('#mdTrust').checked });
     $('#mdNo').onclick = () => done(null);
   });
 }
@@ -149,6 +245,7 @@ async function startHost(from, secret, perm) {
   catch (e) { if (!wantSound) throw e; stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false }); }   // no sound capture available: share the picture only
   const pc = new RTCPeerConnection({ iceServers: iceList() });
   host = { peer: from, pc, stream, perm, secret, q: [], remoteSet: false, t0: Date.now() };
+  renderActiveSession();
   stream.getTracks().forEach(t => { if (t.kind === 'video') { try { t.contentHint = 'detail'; } catch (_) {} } pc.addTrack(t, stream); });
   preferCodec(pc, S.get('codec', 'auto'));
   stream.getVideoTracks()[0].onended = () => endHost(true);
@@ -168,6 +265,8 @@ async function startHost(from, secret, perm) {
 }
 $('#bnCtl').onchange = e => { if (host) host.perm.control = e.target.checked; };
 $('#bnStop').onclick = () => endHost(true);
+$('#disconnectSession').onclick = () => { if (host) endHost(true); else if (view) endView(true); };
+setInterval(renderActiveSession, 1000);
 // ---- stream quality presets (chosen by the viewer, applied by the host) ----
 // br = bitrate cap, fps = frame-rate cap, hint = what the encoder protects (detail/text = sharpness, motion = smoothness), max = capture size cap
 const QUALITY = {
@@ -199,6 +298,7 @@ function applyQuality(q) {
 }
 function endHost(notify) {
   if (!host) return; const h = host; host = null;
+  renderActiveSession();
   if (notify) send({ t: 'bye', to: h.peer });
   try { h.dc && h.dc.close(); } catch (_) {} try { h.pc.close(); } catch (_) {}
   try { h.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
@@ -271,6 +371,7 @@ function connectTo(id, secret) {
   if (id === myId) return toast('That is your own ID');
   if (view) endView(true);
   view = { to: id, secret, st: 'auth', q: [], remoteSet: false };
+  renderActiveSession();
   view.timer = setTimeout(() => { if (view && view.st !== 'live') { toast('No response from partner'); endView(false); } }, 60000);
   toast('Contacting partner…'); log('viewer', id, 'connecting'); pushRecent(id);
   send({ t: 'req', to: id });
@@ -293,7 +394,7 @@ async function onChal(from, nonce) {
   };
   pc.onconnectionstatechange = async () => {
     if (!view) return;
-    if (pc.connectionState === 'connected') { view.st = 'live'; showSession(); }
+    if (pc.connectionState === 'connected') { view.st = 'live'; renderActiveSession(); showSession(); }
     const cs = pc.connectionState;
     if (cs === 'connected') { clearTimeout(view.dcT); netNote(false); }
     if (cs === 'disconnected') { netNote(true); clearTimeout(view.dcT); view.dcT = setTimeout(() => { if (view && view.pc === pc && pc.connectionState !== 'connected') { toast('Connection lost'); endView(false); } }, 30000); }
@@ -334,6 +435,7 @@ async function showSession() {
 }
 function endView(notify) {
   if (!view) return; tpReset(); const v = view; view = null;
+  renderActiveSession();
   clearTimeout(v.timer); clearTimeout(v.dcT); clearInterval(v.statTimer); zoomReset(); netNote(false); $('#session').classList.remove('immersive'); try { v.wake && v.wake.release(); } catch (_) {}
   try { if (v.fdc && v.fdc.readyState === 'open') v.fdc.send(JSON.stringify({ k: 'fa' })); } catch (_) {}
   $('#btnSound').hidden = true; $('#vid').muted = true; $('#btnSound').textContent = 'Sound off'; $('#xferInfo').textContent = '';
@@ -670,7 +772,23 @@ $('#connectBtn').onclick = () => {
 $('#remPw').addEventListener('keydown', e => e.key === 'Enter' && $('#connectBtn').click());
 $('#newInvite').onclick = () => { const c = genSecret(12); invites.clear(); invites.set(c, Date.now() + 10 * 60000); $('#inviteCode').textContent = c; };
 $('#copyInvite').onclick = () => validInvites().length && copy([...invites.keys()][0], 'Invite copied');
+function renderTrustedDevices() {
+  const box = $('#trustedDevices'); if (!box) return;
+  box.replaceChildren();
+  const list = trustedPeers;
+  if (!list.length) { box.textContent = 'No trusted devices yet.'; return; }
+  list.forEach(id => {
+    const row = document.createElement('div'), label = document.createElement('span'), remove = document.createElement('button');
+    label.textContent = 'Device ' + fmtId(id); label.style.flex = '1';
+    remove.textContent = 'Revoke'; remove.title = 'Require approval next time this device connects';
+    remove.onclick = async () => { if (await saveTrustedPeers(trustedPeers.filter(x => x !== id))) log('security', id, 'trusted device revoked'); else toast('Could not revoke device approval'); };
+    row.append(label, remove); box.appendChild(row);
+  });
+}
+renderTrustedDevices();
 $('#optUnattended').checked = S.get('unattended', false);
+$('#optApproveNew').checked = S.get('approveNewDevice', true);
+$('#optApproveNew').onchange = e => { S.set('approveNewDevice', e.target.checked); toast(e.target.checked ? 'New devices need approval' : 'New device approval is off'); };
 $('#optControl').checked = S.get('defControl', true); $('#optClip').checked = S.get('defClip', true);
 $('#optUnattended').onchange = e => { const on = e.target.checked; if (on && permPwCache.length < 12) { e.target.checked = false; return toast('Set a permanent password (12+ chars) first'); } S.set('unattended', on); newPw(); };
 $('#optControl').onchange = e => S.set('defControl', e.target.checked); $('#optClip').onchange = e => S.set('defClip', e.target.checked);
@@ -1004,5 +1122,6 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) chec
 setTimeout(() => checkOta(), 1500);
 { const c = S.get('lastId', ''); if (c) $('#myId').textContent = fmtId(c); }   // show the last known ID instantly
 setInterval(() => { if (ws && ws.readyState === 1 && myId && !host && !view) send({ t: 'ice' }); }, 5 * 3600 * 1000);   // TURN credentials expire after 12 h
-renderLog(); connectWS();
+renderLog();
+Promise.all([loadDeviceKey(), loadTrustedPeers()]).then(([key]) => { deviceKey = key; renderTrustedDevices(); connectWS(); }).catch(() => { toast('Could not load secure device settings'); });
 })();
