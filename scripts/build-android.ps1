@@ -64,6 +64,8 @@ function Install-NexaInstaller([string]$androidDir, [string]$assetsJava) {
   if (-not (Test-Path (Join-Path $assetsJava 'NexaInstallerPlugin.java'))) { Write-Host '  NexaInstaller plugin source not found - APK updates stay manual' -ForegroundColor Yellow; return }
   New-Item -ItemType Directory -Force $pkgDir | Out-Null
   Copy-Item (Join-Path $assetsJava 'NexaInstallerPlugin.java') $pkgDir -Force
+  $resultReceiver = Join-Path $assetsJava 'NexaInstallResultReceiver.java'
+  if (Test-Path $resultReceiver) { Copy-Item $resultReceiver $pkgDir -Force }
   $main = "package com.nexadesk.app;`r`n`r`nimport android.os.Bundle;`r`nimport com.getcapacitor.BridgeActivity;`r`n`r`npublic class MainActivity extends BridgeActivity {`r`n  @Override`r`n  public void onCreate(Bundle savedInstanceState) {`r`n    registerPlugin(NexaInstallerPlugin.class);`r`n    super.onCreate(savedInstanceState);`r`n  }`r`n}`r`n"
   Write-Utf8NoBom (Join-Path $pkgDir 'MainActivity.java') $main
   $mf = Join-Path $androidDir 'app\src\main\AndroidManifest.xml'
@@ -71,6 +73,16 @@ function Install-NexaInstaller([string]$androidDir, [string]$assetsJava) {
   if ($t -notmatch 'REQUEST_INSTALL_PACKAGES') {
     $perm = '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />' + "`r`n`r`n    "
     $t = ([regex]'<application').Replace($t, ($perm + '<application'), 1)
+    Write-Utf8NoBom $mf $t
+  }
+  $t = [IO.File]::ReadAllText($mf)
+  if ($t -notmatch 'NexaInstallResultReceiver') {
+    $receiver = '<receiver android:name=".NexaInstallResultReceiver" android:exported="false">' + "`r`n" +
+      '            <intent-filter>' + "`r`n" +
+      '                <action android:name="com.nexadesk.app.INSTALL_RESULT" />' + "`r`n" +
+      '            </intent-filter>' + "`r`n" +
+      '        </receiver>' + "`r`n" + '    '
+    $t = ([regex]'</application>').Replace($t, ($receiver + '</application>'), 1)
     Write-Utf8NoBom $mf $t
   }
   Write-Host '  in-app APK update plugin installed' -ForegroundColor DarkGray

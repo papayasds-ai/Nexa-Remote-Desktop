@@ -154,8 +154,7 @@ system privileges. That is a deliberate security decision, not something the app
   One-time setup: create the R2 bucket `nexadesk-releases` in the Cloudflare dashboard, enable public access, and write its
   public address (for example `https://pub-xxxx.r2.dev`) into `release-host.txt`. Installers are about 75 MB, which is why R2 is
   used (static assets are limited to 25 MB per file). Test this on a Windows PC before relying on it.
-- **Android app updates:** Android does not allow silent APK installs in every case, so the app offers both an in-app installer and a direct APK download link. Installing the APK
-  is still one tap.
+- **Android app updates:** Android does not allow silent APK installs in every case, so the app offers both an in-app installer and a direct APK download link. After Android confirms an update, NexaDesk relaunches and shows the installed package version in Settings.
 - **Code signing (Windows):** put your certificate at `signing\codesign.pfx` and its password in `signing\codesign-password.txt`.
   Without them the EXE stays unsigned and Windows will warn people.
 - **Automatic native builds:** `install-auto-release.ps1` now also runs the full release when files in `desktop\` or the

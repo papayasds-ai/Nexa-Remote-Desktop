@@ -46,6 +46,20 @@ public class NexaInstallerPlugin extends Plugin {
     call.resolve(r);
   }
 
+  @PluginMethod
+  public void getAppVersion(PluginCall call) {
+    JSObject r = new JSObject();
+    try {
+      String version = getContext().getPackageManager()
+        .getPackageInfo(getContext().getPackageName(), 0).versionName;
+      r.put("version", version == null ? "" : version);
+    } catch (Exception e) {
+      call.reject("could not read installed app version", e);
+      return;
+    }
+    call.resolve(r);
+  }
+
   // opens "Install unknown apps" for NexaDesk (needed once, by Android's rules)
   @PluginMethod
   public void openSettings(PluginCall call) {
@@ -157,7 +171,7 @@ public class NexaInstallerPlugin extends Plugin {
               fin.close();
             }
             Intent cb = new Intent(ACTION);
-            cb.setPackage(ctx.getPackageName());
+            cb.setClass(ctx, NexaInstallResultReceiver.class);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
             PendingIntent pend = PendingIntent.getBroadcast(ctx, id, cb, flags);

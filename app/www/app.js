@@ -777,6 +777,13 @@ setTimeout(async () => {                         // what is actually running on 
   const parts = [];
   if (CU()) { try { const c = await CU().current(); const id = c && c.bundle && c.bundle.id; parts.push(id && id !== 'builtin' ? 'downloaded update (' + id.slice(0, 8) + ')' : 'built-in package, no update applied'); } catch (_) {} }
   if (window.nexa && window.nexa.nativeVersion) { try { parts.push('app package v' + (await window.nexa.nativeVersion())); } catch (_) {} }
+  const installer = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NexaInstaller;
+  if (installer && installer.getAppVersion) {
+    try {
+      const installed = await installer.getAppVersion();
+      if (installed && installed.version) $('#verInfo').textContent = 'v' + installed.version;
+    } catch (_) {}
+  }
   $('#bundleInfo').textContent = 'Running: ' + (parts.join(' · ') || 'built-in package');
 }, 0);
 const CU = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater;
