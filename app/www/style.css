@@ -66,3 +66,10 @@ pre.hint{margin:8px 0 0;font:12.5px Consolas,monospace}
 #netNote{position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:46;background:#b36b00;color:#fff;padding:6px 14px;border-radius:10px;font-size:13px}
 .fkeys{display:flex;flex-wrap:wrap;gap:6px;width:100%}.fkeys button{flex:1;min-width:48px;padding:10px 4px}
 .stage{position:relative}
+
+/* Security tab: stack the short cards beside the tall Access policy card so there is no big empty column */
+@media (min-width:900px){
+  #tab-sec .grid{grid-template-columns:minmax(300px,1fr) minmax(360px,1.2fr);align-items:start}
+  #tab-sec .grid>.card:nth-child(1),#tab-sec .grid>.card:nth-child(3),#tab-sec .grid>.card:nth-child(4){grid-column:1}
+  #tab-sec .grid>.card:nth-child(2){grid-column:2;grid-row:1 / span 3}
+}
