@@ -1037,6 +1037,10 @@ async function installApkNow(nat) {
     }
     const c = await NI.canInstall();
     if (!c.allowed) { apkBusy = false; apkAutoFor = ''; box.textContent = 'Allow "Install unknown apps" for NexaDesk, then return to continue the update.'; toast('Allow APK installs for NexaDesk'); await NI.openSettings(); return; }
+    if (NI.prepareUpdateNotifications) {
+      const n = await NI.prepareUpdateNotifications();
+      if (n && n.allowed === false) toast('Notifications are off; reopen NexaDesk from its icon after the update.');
+    }
     apkBusy = true; box.textContent = 'Downloading app update v' + nat.version + ' ...';
     await NI.install({ url: nat.android.url, sha256: nat.android.sha256 });
     box.textContent = 'Confirm the update in the Android window.';

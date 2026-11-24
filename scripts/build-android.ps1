@@ -70,7 +70,7 @@ function Install-NexaInstaller([string]$androidDir, [string]$assetsJava) {
   Write-Utf8NoBom (Join-Path $pkgDir 'MainActivity.java') $main
   $mf = Join-Path $androidDir 'app\src\main\AndroidManifest.xml'
   $t = [IO.File]::ReadAllText($mf)
-  foreach ($permission in @('REQUEST_INSTALL_PACKAGES', 'UPDATE_PACKAGES_WITHOUT_USER_ACTION')) {
+  foreach ($permission in @('REQUEST_INSTALL_PACKAGES', 'UPDATE_PACKAGES_WITHOUT_USER_ACTION', 'POST_NOTIFICATIONS')) {
     if ($t -notmatch [regex]::Escape($permission)) {
       $perm = '<uses-permission android:name="android.permission.' + $permission + '" />' + "`r`n    "
       $t = ([regex]'<application').Replace($t, ($perm + '<application'), 1)

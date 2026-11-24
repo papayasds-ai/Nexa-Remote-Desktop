@@ -1,5 +1,6 @@
 package com.nexadesk.app;
 
+import android.Manifest;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
@@ -12,10 +13,13 @@ import android.security.keystore.KeyProperties;
 import android.provider.Settings;
 import android.util.Base64;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -35,7 +39,9 @@ import javax.crypto.spec.GCMParameterSpec;
  * signed manifest, hands it to Android's PackageInstaller and deletes it. Android still shows its own "Update" confirmation, except where the
  * system allows a silent update (Android 12+ for an app that was installed by this installer).
  */
-@CapacitorPlugin(name = "NexaInstaller")
+@CapacitorPlugin(name = "NexaInstaller", permissions = {
+  @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS })
+})
 public class NexaInstallerPlugin extends Plugin {
   private static final String ACTION = "com.nexadesk.app.INSTALL_RESULT";
   private static final String STORE = "nexadesk_secure";
@@ -137,6 +143,24 @@ public class NexaInstallerPlugin extends Plugin {
   public void canInstall(PluginCall call) {
     JSObject r = new JSObject();
     r.put("allowed", allowed());
+    call.resolve(r);
+  }
+
+  @PluginMethod
+  public void prepareUpdateNotifications(PluginCall call) {
+    if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) {
+      JSObject r = new JSObject();
+      r.put("allowed", true);
+      call.resolve(r);
+      return;
+    }
+    requestPermissionForAlias("notifications", call, "notificationPermissionResult");
+  }
+
+  @PermissionCallback
+  private void notificationPermissionResult(PluginCall call) {
+    JSObject r = new JSObject();
+    r.put("allowed", getPermissionState("notifications") == PermissionState.GRANTED);
     call.resolve(r);
   }
 
