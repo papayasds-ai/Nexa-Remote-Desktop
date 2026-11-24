@@ -131,31 +131,48 @@ if ($legacyId) { & node "$PSScriptRoot\sign-manifest.js" sign $manifestPath $leg
 
 # ---- 2) Optional GitHub source mirror ----
 $relSha = 'main'
+$githubSourceReady = $false
 if ($githubReady) {
-  Write-Host "Syncing the optional GitHub mirror for v$ver..." -ForegroundColor Cyan
-  $clone = Join-Path $build 'repo'
-  [void](Invoke-Gh auth setup-git)
-  Invoke-Git clone --depth 1 $repoUrl $clone
-  $ota = Join-Path $clone 'ota'; New-Item -ItemType Directory -Force $ota | Out-Null
-  Get-ChildItem $ota -File | Remove-Item -Force
-  Copy-Item $zip $ota; Copy-Item $manifestPath $ota; Copy-Item $sig2Path $ota; if (Test-Path $sigPath) { Copy-Item $sigPath $ota }
-  $skip = @('.git', 'node_modules', 'build', 'output', 'signing', '.wrangler') + @('desktop\www', 'android-app\www', 'android-app\android', 'ota' | ForEach-Object { Join-Path $root $_ })
-  robocopy $root $clone /E /XD @skip /XF .server-secret server-url.txt notify-token.txt config.json keystore-password.txt *.jks *.keystore *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
-  if ($LASTEXITCODE -ge 8) { throw 'Copying source files failed' }
-  Push-Location $clone
   try {
-    foreach ($f in @(& git.exe ls-files)) {
-      if ($f -like 'ota/*' -or $f -like '.git*') { continue }
-      if (-not (Test-Path (Join-Path $root $f))) { Invoke-Git rm -q $f }
-    }
-    Invoke-Git add -A
-    $tracked = (& git.exe ls-files) -join "`n"
-    if ($tracked -match '\.jks|\.pem|\.keystore|\.server-secret|notify-token|keystore-password') { throw 'Refusing to publish: a secret file would be uploaded.' }
-    Invoke-Git -c user.name=NexaDesk -c user.email=release@nexadesk.local commit -m "Release v$ver"
-    Invoke-Git push origin HEAD:main
-    $relSha = (& git.exe rev-parse HEAD).Trim()
-  } finally { Pop-Location }
+    Write-Host "Syncing the optional GitHub mirror for v$ver..." -ForegroundColor Cyan
+    $clone = Join-Path $build 'repo'
+    [void](Invoke-Gh auth setup-git)
+    Invoke-Git clone --depth 1 $repoUrl $clone
+    $ota = Join-Path $clone 'ota'; New-Item -ItemType Directory -Force $ota | Out-Null
+    Get-ChildItem $ota -File | Remove-Item -Force
+    Copy-Item $zip $ota; Copy-Item $manifestPath $ota; Copy-Item $sig2Path $ota; if (Test-Path $sigPath) { Copy-Item $sigPath $ota }
+    $skip = @('.git', 'node_modules', 'build', 'output', 'signing', '.wrangler') + @('desktop\www', 'android-app\www', 'android-app\android', 'ota' | ForEach-Object { Join-Path $root $_ })
+    robocopy $root $clone /E /XD @skip /XF .server-secret server-url.txt notify-token.txt token.txt config.json keystore-password.txt *.jks *.keystore *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw 'Copying source files failed' }
+    Push-Location $clone
+    try {
+      foreach ($f in @(& git.exe ls-files)) {
+        if ($f -like 'ota/*' -or $f -like '.git*') { continue }
+        if (-not (Test-Path (Join-Path $root $f))) { Invoke-Git rm -q $f }
+      }
+      Invoke-Git add -A
+      $tracked = (& git.exe ls-files) -join "`n"
+      if ($tracked -match '\.jks|\.pem|\.keystore|\.server-secret|notify-token|(^|\n)token\.txt(\n|$)|keystore-password') { throw 'Refusing to publish: a secret file would be uploaded.' }
+      Invoke-Git -c user.name=NexaDesk -c user.email=release@nexadesk.local commit -m "Release v$ver"
+      Invoke-Git push origin HEAD:main
+      $relSha = (& git.exe rev-parse HEAD).Trim()
+      $githubSourceReady = $true
+    } finally { Pop-Location }
+  } catch {
+    Write-Host "GitHub source mirror was skipped: $($_.Exception.Message). The signed Cloudflare release will continue." -ForegroundColor Yellow
+    if ($clone -and (Test-Path -LiteralPath $clone)) { Remove-Item -LiteralPath $clone -Recurse -Force }
+  }
 } else { Write-Host 'GitHub source/release mirror skipped; the signed update will still be published to Cloudflare.' -ForegroundColor Yellow }
+
+# If source mirroring failed, do not advertise its stale OTA bundle as a download fallback.
+if (-not $githubSourceReady -and $githubReady) {
+  $manifestObject = ConvertFrom-Json $manifest
+  $manifestObject.mirrors.web = ''
+  $manifest = $manifestObject | ConvertTo-Json -Depth 5
+  [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding $false))
+  & node "$PSScriptRoot\sign-manifest.js" sign2 $manifestPath $RecoveryKey; if ($LASTEXITCODE) { throw 're-signing manifest after GitHub mirror skip failed' }
+  if ($legacyId) { & node "$PSScriptRoot\sign-manifest.js" sign $manifestPath $legacyId; if ($LASTEXITCODE) { throw 'legacy re-signing after GitHub mirror skip failed' } }
+}
 
 # Keep the local ota\ folder current for diagnostics and manual release review.
 $localOta = Join-Path $root 'ota'; New-Item -ItemType Directory -Force $localOta | Out-Null
