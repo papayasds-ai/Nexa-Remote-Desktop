@@ -900,14 +900,6 @@ setTimeout(async () => {                         // what is actually running on 
     try {
       const installed = await installer.getAppVersion();
       if (installed && installed.version) $('#verInfo').textContent = 'v' + installed.version;
-      // A web bundle downloaded earlier outlives an APK update and would keep showing the old version: drop it once so the APK's own files run.
-      if (installed && installed.version && CU() && cmpv(installed.version, VER) > 0) {
-        let tried = ''; try { tried = sessionStorage.getItem('nxResetBundle') || ''; } catch (_) {}
-        if (tried !== installed.version) {
-          try { sessionStorage.setItem('nxResetBundle', installed.version); } catch (_) {}
-          try { await CU().reset(); } catch (_) {}
-        }
-      }
     } catch (_) {}
   }
   $('#bundleInfo').textContent = 'Running: ' + (parts.join(' · ') || 'built-in package');
