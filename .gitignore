@@ -15,5 +15,6 @@ cloudflare/.dev.vars
 *.keystore
 build/
 notify-token.txt
+token.txt
 desktop/build-config.json
 *.before-force

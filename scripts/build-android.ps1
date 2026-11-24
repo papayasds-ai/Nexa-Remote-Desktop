@@ -64,13 +64,26 @@ function Install-NexaInstaller([string]$androidDir, [string]$assetsJava) {
   if (-not (Test-Path (Join-Path $assetsJava 'NexaInstallerPlugin.java'))) { Write-Host '  NexaInstaller plugin source not found - APK updates stay manual' -ForegroundColor Yellow; return }
   New-Item -ItemType Directory -Force $pkgDir | Out-Null
   Copy-Item (Join-Path $assetsJava 'NexaInstallerPlugin.java') $pkgDir -Force
+  $resultReceiver = Join-Path $assetsJava 'NexaInstallResultReceiver.java'
+  if (Test-Path $resultReceiver) { Copy-Item $resultReceiver $pkgDir -Force }
   $main = "package com.nexadesk.app;`r`n`r`nimport android.os.Bundle;`r`nimport com.getcapacitor.BridgeActivity;`r`n`r`npublic class MainActivity extends BridgeActivity {`r`n  @Override`r`n  public void onCreate(Bundle savedInstanceState) {`r`n    registerPlugin(NexaInstallerPlugin.class);`r`n    super.onCreate(savedInstanceState);`r`n  }`r`n}`r`n"
   Write-Utf8NoBom (Join-Path $pkgDir 'MainActivity.java') $main
   $mf = Join-Path $androidDir 'app\src\main\AndroidManifest.xml'
   $t = [IO.File]::ReadAllText($mf)
-  if ($t -notmatch 'REQUEST_INSTALL_PACKAGES') {
-    $perm = '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />' + "`r`n`r`n    "
-    $t = ([regex]'<application').Replace($t, ($perm + '<application'), 1)
+  foreach ($permission in @('REQUEST_INSTALL_PACKAGES', 'UPDATE_PACKAGES_WITHOUT_USER_ACTION', 'POST_NOTIFICATIONS')) {
+    if ($t -notmatch [regex]::Escape($permission)) {
+      $perm = '<uses-permission android:name="android.permission.' + $permission + '" />' + "`r`n    "
+      $t = ([regex]'<application').Replace($t, ($perm + '<application'), 1)
+    }
+  }
+  Write-Utf8NoBom $mf $t
+  if ($t -notmatch 'NexaInstallResultReceiver') {
+    $receiver = '<receiver android:name=".NexaInstallResultReceiver" android:exported="false">' + "`r`n" +
+      '            <intent-filter>' + "`r`n" +
+      '                <action android:name="com.nexadesk.app.INSTALL_RESULT" />' + "`r`n" +
+      '            </intent-filter>' + "`r`n" +
+      '        </receiver>' + "`r`n" + '    '
+    $t = ([regex]'</application>').Replace($t, ($receiver + '</application>'), 1)
     Write-Utf8NoBom $mf $t
   }
   Write-Host '  in-app APK update plugin installed' -ForegroundColor DarkGray
@@ -131,6 +144,8 @@ if (-not $NoBump) { & "$PSScriptRoot\bump-version.ps1" }
 $ver = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 
 $app = Join-Path $root 'android-app'
+$oldInstallLinks = $env:npm_config_install_links
+$env:npm_config_install_links = 'true'   # install local file dependencies without requiring Windows symlink privileges
 Remove-Item (Join-Path $app 'www') -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $root 'app\www') (Join-Path $app 'www') -Recurse
 "window.NEXA_DEFAULT_SERVER = $(ConvertTo-Json $ServerUrl -Compress); window.NEXA_VERSION = `"$ver`";" | Set-Content (Join-Path $app 'www\config.js') -Encoding UTF8
@@ -166,6 +181,9 @@ try {
   $signDir = Join-Path $root 'signing'; New-Item -ItemType Directory -Force $signDir | Out-Null
   $ks = Join-Path $signDir 'nexadesk.jks'; $pwFile = Join-Path $signDir 'keystore-password.txt'
   if (-not (Test-Path $ks)) {
+    $existingApks = @(Get-ChildItem (Join-Path $root 'output') -Filter 'NexaDesk-*.apk' -File -ErrorAction SilentlyContinue)
+    if ($existingApks.Count -gt 0) { throw "Signing key is missing, but an older NexaDesk APK exists ($($existingApks[0].Name)). Refusing to generate a different key because Android would reject the update. Restore signing\nexadesk.jks and signing\keystore-password.txt from backup first." }
+    if (Test-Path $pwFile) { throw "Signing key is missing but its password file remains: $pwFile. Refusing to generate a replacement key." }
     $bytes = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $kpw = [Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', 'x'
     keytool -genkeypair -v -keystore $ks -alias nexadesk -keyalg RSA -keysize 4096 -validity 10000 -storepass $kpw -keypass $kpw -dname 'CN=NexaDesk, O=NexaDesk' | Out-Null
@@ -176,13 +194,32 @@ try {
   $kpw = (Get-Content $pwFile -Raw).Trim()
   $bt = Get-ChildItem (Join-Path $sdk 'build-tools') | Sort-Object { [version]($_.Name -replace '[^0-9.].*$', '') } -Descending | Select-Object -First 1
   if (-not $bt) { throw 'Android build-tools not installed (use SDK Manager).' }
+  $apksigner = Join-Path $bt.FullName 'apksigner.bat'
+  # Keep the signing identity stable. If an earlier APK is available, compare its certificate before replacing it.
+  $existingApk = Get-ChildItem (Join-Path $root 'output') -Filter 'NexaDesk-*.apk' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+  $priorSigner = ''
+  if ($existingApk) {
+    $priorInfo = (& $apksigner verify --print-certs $existingApk.FullName 2>&1 | Out-String)
+    if ($LASTEXITCODE) { throw "Could not verify existing APK signer ($($existingApk.Name)); refusing to replace existing release." }
+    $priorSigner = [regex]::Match($priorInfo, 'Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)').Groups[1].Value.ToLower()
+    if (-not $priorSigner) { throw "Could not read existing APK signer ($($existingApk.Name)); refusing to replace existing release." }
+  }
   $aligned = Join-Path $app 'aligned.apk'; Remove-Item $aligned -ErrorAction SilentlyContinue
   & (Join-Path $bt.FullName 'zipalign.exe') -p -f 4 $unsigned.FullName $aligned; if ($LASTEXITCODE) { throw 'zipalign failed' }
   $out = Join-Path $root 'output'; New-Item -ItemType Directory -Force $out | Out-Null
-  Get-ChildItem $out -Filter 'NexaDesk*.apk' -ErrorAction SilentlyContinue | Remove-Item -Force   # previous builds
   $final = Join-Path $out "NexaDesk-$ver.apk"
-  & (Join-Path $bt.FullName 'apksigner.bat') sign --ks $ks --ks-pass "pass:$kpw" --key-pass "pass:$kpw" --out $final $aligned; if ($LASTEXITCODE) { throw 'apksigner failed' }
-  & (Join-Path $bt.FullName 'apksigner.bat') verify $final; if ($LASTEXITCODE) { throw 'APK verification failed' }
+  & $apksigner sign --ks $ks --ks-pass "pass:$kpw" --key-pass "pass:$kpw" --out $final $aligned; if ($LASTEXITCODE) { throw 'apksigner failed' }
+  & $apksigner verify --print-certs $final; if ($LASTEXITCODE) { throw 'APK verification failed' }
+  if ($priorSigner) {
+    $newInfo = (& $apksigner verify --print-certs $final 2>&1 | Out-String)
+    $newSigner = [regex]::Match($newInfo, 'Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)').Groups[1].Value.ToLower()
+    if (-not $newSigner -or $newSigner -ne $priorSigner) { Remove-Item $final -Force -ErrorAction SilentlyContinue; throw 'The new APK signing certificate does not match the existing APK. The release was stopped to prevent Android update failures.' }
+  }
   Remove-Item $aligned -ErrorAction SilentlyContinue
+  Get-ChildItem $out -Filter 'NexaDesk*.apk' -File | Where-Object { $_.FullName -ne $final } | Remove-Item -Force
   Write-Host "`nDone (v$ver). Android APK: $final" -ForegroundColor Green
-} finally { Pop-Location }
+} finally {
+  Pop-Location
+  if ($null -eq $oldInstallLinks) { Remove-Item Env:npm_config_install_links -ErrorAction SilentlyContinue }
+  else { $env:npm_config_install_links = $oldInstallLinks }
+}

@@ -59,17 +59,25 @@
         </div>
         <div class="card">
           <h2>Access policy</h2>
-          <label class="chk"><input type="checkbox" id="optUnattended"> Unattended access (skip the approval prompt when the correct permanent password is used)</label>
+          <label class="chk"><input type="checkbox" id="optUnattended"> Unattended access (trusted devices can reconnect without a prompt)</label>
+          <label class="chk"><input type="checkbox" id="optApproveNew" checked> Ask approval when an unknown device first uses the permanent password</label>
+          <div class="lbl">Trusted devices</div><div id="trustedDevices" class="list"></div>
+          <p class="hint">Trusted devices still need the permanent password. Removing a device makes its next connection require approval.</p>
           <label class="chk"><input type="checkbox" id="optControl" checked> Allow remote control by default</label>
           <label class="chk"><input type="checkbox" id="optClip" checked> Allow clipboard sharing by default</label>
           <label class="chk" id="rowLockEnd"><input type="checkbox" id="optLockEnd"> Lock this PC when a remote session ends</label>
           <label class="chk hostonly"><input type="checkbox" id="optFiles" checked> Allow file transfer to this PC by default (files go to Downloads\NexaDesk Received)</label>
           <label class="chk hostonly"><input type="checkbox" id="optSound"> Share this PC's sound with the viewer</label>
           <label class="chk hostonly">Video codec <select id="optCodec"><option value="auto">Auto</option><option value="VP9">VP9 (sharper text, more CPU)</option><option value="H264">H.264 (light on CPU)</option><option value="VP8">VP8 (most compatible)</option></select></label>
-          <p class="hint">With unattended access on, your password stays fixed so you can reconnect later. Use a strong one.</p>
+          <p class="hint">With unattended access on, your password stays fixed. New devices still need your approval by default. Use a strong one.</p>
           <div class="lbl">Permanent password (unattended)</div>
           <input id="permPw" type="password" placeholder="min 12 characters" autocomplete="new-password">
           <button id="savePerm">Save permanent password</button>
+        </div>
+        <div class="card wide">
+          <h2>Active session</h2>
+          <div id="activeSession" class="hint">No active session.</div>
+          <button id="disconnectSession" class="danger" hidden>Disconnect active session</button>
         </div>
         <div class="card wide">
           <h2>Quick keys (phone)</h2>
@@ -190,11 +198,12 @@
 </div>
 
 <div id="modal" hidden><div class="box">
-  <h3>Remote access request</h3>
+  <h3 id="mdTitle">Remote access request</h3>
   <p><b id="mdId"></b> wants to view your screen.</p>
   <label class="chk"><input type="checkbox" id="mdCtl" checked> Allow mouse &amp; keyboard control</label>
   <label class="chk"><input type="checkbox" id="mdClip" checked> Allow clipboard</label>
   <label class="chk"><input type="checkbox" id="mdFiles" checked> Allow file transfer to this PC</label>
+  <label class="chk" id="mdTrustRow" hidden><input type="checkbox" id="mdTrust"> Trust this device for future unattended connections</label>
   <div class="row"><button id="mdNo">Deny</button><button id="mdYes" class="primary">Allow</button></div>
 </div></div>
 <div id="toast"></div>

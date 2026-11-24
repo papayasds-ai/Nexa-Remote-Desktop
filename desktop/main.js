@@ -138,6 +138,8 @@ ipcMain.handle('nx-native-install', async (e, o) => {
 ipcMain.handle('nx-native-version', e => (fromOurWindow(e) && isInstalled() ? app.getVersion() : ''));
 // permanent password: encrypted with the Windows account key (DPAPI). Only our own window may use it.
 const secretFile = () => path.join(app.getPath('userData'), 'secret.bin');
+const identityFile = () => path.join(app.getPath('userData'), 'identity.bin');
+const trustedFile = () => path.join(app.getPath('userData'), 'trusted-devices.bin');
 const vaultFile = () => path.join(app.getPath('userData'), 'vault.bin');
 const fromOurWindow = e => !!win && e.sender === win.webContents;
 // saved-PC passwords (one JSON text, encrypted with DPAPI)
@@ -156,6 +158,22 @@ ipcMain.handle('nx-secret-get', e => {
 ipcMain.handle('nx-secret-set', (e, v) => {
   if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable() || typeof v !== 'string' || v.length > 256) return false;
   try { fs.writeFileSync(secretFile(), safeStorage.encryptString(v)); return true; } catch (_) { return false; }
+});
+ipcMain.handle('nx-identity-get', e => {
+  if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable()) return '';
+  try { return safeStorage.decryptString(fs.readFileSync(identityFile())); } catch (_) { return ''; }
+});
+ipcMain.handle('nx-identity-set', (e, v) => {
+  if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable() || typeof v !== 'string' || !/^[a-f0-9]{64}$/i.test(v)) return false;
+  try { fs.writeFileSync(identityFile(), safeStorage.encryptString(v)); return true; } catch (_) { return false; }
+});
+ipcMain.handle('nx-trusted-get', e => {
+  if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable()) return '';
+  try { return safeStorage.decryptString(fs.readFileSync(trustedFile())); } catch (_) { return ''; }
+});
+ipcMain.handle('nx-trusted-set', (e, v) => {
+  if (!fromOurWindow(e) || !safeStorage.isEncryptionAvailable() || typeof v !== 'string' || v.length > 12000) return false;
+  try { fs.writeFileSync(trustedFile(), safeStorage.encryptString(v)); return true; } catch (_) { return false; }
 });
 // host comfort (Windows): keep the PC from sleeping while NexaDesk runs, and optionally start with Windows (minimized)
 let awakeId = null;

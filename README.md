@@ -9,8 +9,8 @@ Components
 
 ## Quick start (Windows PC)
 1. Install Node.js 22.12+ LTS (the build tools need it), Git for Windows, and (for the APK) JDK 17 + Android Studio SDK with `ANDROID_HOME` set.
-2. Double-click `NexaDesk.bat` -> **1) FULL RELEASE**. First run it logs in to Cloudflare (browser), creates the server, builds
-   `output\NexaDesk-Setup.exe` + `NexaDesk.apk`, pushes to GitHub (a sign-in window may appear once) and pings devices.
+2. Double-click `NexaDesk.bat` -> **1) FULL FORCED RELEASE**. First run it logs in to Cloudflare (browser), creates the server, builds
+   `output\NexaDesk-Setup.exe` + `NexaDesk.apk`, publishes a mandatory update and pings devices. Android may still show its system install confirmation.
 3. Install the EXE / APK. ID and password are there immediately - no server to run, nothing to type.
 4. Later: **2) QUICK UPDATE** for UI/logic changes (no rebuild, all devices update instantly), **1)** when native parts change.
 
@@ -89,7 +89,7 @@ system privileges. That is a deliberate security decision, not something the app
 ## Commands (NexaDesk.bat)
 | Command | What it does |
 |---|---|
-| `release` | full release: server + EXE + APK + GitHub + instant update |
+| `release` | full forced release: server + EXE + APK + publish a mandatory update to devices |
 | `update [-Force] [-NoBump] [-WithPortable] [-RetryUpload] [-RecoveryKey f] [-AppKey id]` | quick web-layer update |
 | `force` | quick update every device must install |
 | `windows` / `android` | build the EXE / APK only |
@@ -144,8 +144,7 @@ system privileges. That is a deliberate security decision, not something the app
 - Updates: signed with a key kept on your PC; the apps reject anything unsigned, tampered or signed by another key.
 - Not hidden: the app shows a banner and asks for consent while it is controlling a PC. This is deliberate.
 - Open items: the EXE and APK are not signed by a trusted certificate authority (Windows SmartScreen and Play Protect will warn);
-  the permanent password is kept in the app's local storage (encrypting it with the OS keystore is the next step);
-  unattended mode lets anyone with the permanent password control the PC without a prompt, so keep it off unless needed;
+  once a device is explicitly trusted for unattended access, anyone who has that device and the permanent password can reconnect;
   the build tools still have moderate advisories (build-time only, never shipped).
 
 ## New features and the setup they need
@@ -154,8 +153,10 @@ system privileges. That is a deliberate security decision, not something the app
   One-time setup: create the R2 bucket `nexadesk-releases` in the Cloudflare dashboard, enable public access, and write its
   public address (for example `https://pub-xxxx.r2.dev`) into `release-host.txt`. Installers are about 75 MB, which is why R2 is
   used (static assets are limited to 25 MB per file). Test this on a Windows PC before relying on it.
-- **Android app updates:** Android does not allow silent APK installs, so the app shows a download link. Installing the APK
-  is still one tap.
+- **Android app updates:** Android does not allow silent APK installs in every case, so the app offers both an in-app installer and a direct APK download link. After Android confirms an update, NexaDesk relaunches and shows the installed package version in Settings.
+- **Device-bound secrets:** Android keeps the device identity and unattended password encrypted with a non-exportable Android Keystore key. Windows protects the device identity and unattended password with the current Windows account. Older plaintext values migrate on first launch.
+- **First-time device approval:** with unattended access enabled, an unknown device must be approved once before it can reconnect without a prompt. You can review or revoke trusted device IDs in Security. Every connection still needs the permanent password.
+- **APK signing continuity:** each release must use the same `signing\nexadesk.jks` and password file. Android rejects an update signed by a different key; do not generate a replacement key for an existing installation. `NexaDesk.bat migrate` copies the signing folder when moving to a new source folder. Android also checks signer continuity during installation, while the signed manifest verifies the APK hash.
 - **Code signing (Windows):** put your certificate at `signing\codesign.pfx` and its password in `signing\codesign-password.txt`.
   Without them the EXE stays unsigned and Windows will warn people.
 - **Automatic native builds:** `install-auto-release.ps1` now also runs the full release when files in `desktop\` or the

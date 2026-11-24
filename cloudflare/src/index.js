@@ -11,7 +11,7 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     // update files (manifest, signature, bundle): static assets, served with CORS so the apps can fetch them
-    if (req.method === 'GET' && (url.pathname === '/update.json' || url.pathname === '/update.sig' || url.pathname === '/update.sig2' || /^\/www-\d+\.\d+\.\d+\.zip$/.test(url.pathname))) {
+    if (req.method === 'GET' && (url.pathname === '/update.json' || url.pathname === '/update.sig' || url.pathname === '/update.sig2' || /^\/www-\d+\.\d+\.\d+\.zip$/.test(url.pathname) || /^\/NexaDesk-\d+\.\d+\.\d+\.apk$/.test(url.pathname))) {
       const r = await env.ASSETS.fetch(req);
       const h = new Headers(r.headers);
       h.set('Access-Control-Allow-Origin', '*');
