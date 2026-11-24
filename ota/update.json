@@ -1,9 +1,9 @@
 {
-    "version":  "1.0.130",
-    "bundle":  "www-1.0.130.zip",
-    "sha256":  "b5c360927f355337e63c0201e2a32db9b89fc00285391fb2997364e6521836ec",
+    "version":  "1.0.131",
+    "bundle":  "www-1.0.131.zip",
+    "sha256":  "c74c7217b86a238dea7f490d077bedb4ec17e3e9b4102c7d1f20f01758c01ac5",
     "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
-    "released":  "2026-11-24T01:30:45.2441076Z",
+    "released":  "2026-11-24T19:55:52.2830000Z",
     "mirrors":  {
                     "web":  "https://raw.githubusercontent.com/papayasds-ai/Nexa-Remote-Desktop/HEAD/ota/",
                     "app":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/"
@@ -13,18 +13,16 @@
                   "047d1bba55ce3069"
               ],
     "keyId":  "",
-    "force":  true,
+    "force":  false,
     "native":  {
-                   "version":  "1.0.130",
+                   "version":  "1.0.131",
                    "windows":  {
-                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.130.exe",
-                                   "sha256":  "a6826f9332bea5a56939f6a7a844713c988f6484ef9c876fc00448c655e4a946"
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.131.exe",
+                                   "sha256":  "2a4c6c367198790503a42909d5cf35bd4e294990474d6d8673a853ef80bfe4d7"
                                },
                    "android":  {
-                                   "url":  "https://nexadesk-signaling.papayasds.workers.dev/NexaDesk-1.0.130.apk",
-                                   "sha256":  "3878432ed65e7b1f790c356fd55c261533f2aa29f920354e1bd5cedd756a0107",
-                                   "version":  "1.0.130",
-                                   "minUpdaterVersion":  "1.0.124"
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-1.0.131.apk",
+                                   "sha256":  "4fa9c3da2817357bbbac2620634c361fa95fe68aab0d814a2c04fb60a2fa62e4"
                                }
                }
 }
