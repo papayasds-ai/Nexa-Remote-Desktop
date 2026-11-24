@@ -22,7 +22,7 @@ function Sync-SourceToGitHub([string]$root, [string]$repo, [string]$dir) {
   Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
   if ((Invoke-GitC clone --depth 1 "https://github.com/$repo.git" $dir) -ne 0) { Write-Host "git clone failed:`n$($script:cwOut -join "`n")" -ForegroundColor Red; return $false }
   $skip = @('.git', 'node_modules', 'build', 'output', 'signing', '.wrangler') + @('desktop\www', 'android-app\www', 'android-app\android', 'ota' | ForEach-Object { Join-Path $root $_ })
-  robocopy $root $dir /E /XD @skip /XF .server-secret server-url.txt notify-token.txt token.txt config.json keystore-password.txt *.jks *.keystore *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
+  robocopy $root $dir /E /XD @skip /XF .server-secret server-url.txt notify-token.txt config.json keystore-password.txt *.jks *.keystore *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
   if ($LASTEXITCODE -ge 8) { Write-Host 'Copying the source files failed.' -ForegroundColor Red; return $false }
   Push-Location $dir
   try {
@@ -34,7 +34,7 @@ function Sync-SourceToGitHub([string]$root, [string]$repo, [string]$dir) {
     [void](Invoke-GitC status --porcelain)
     if (-not (@($script:cwOut) | Where-Object { "$_".Trim() })) { Write-Host '  source code on GitHub is already up to date' -ForegroundColor DarkGray; return $true }
     $tracked = (& git.exe ls-files) -join "`n"
-    if ($tracked -match '\.jks|\.pem|\.keystore|\.server-secret|notify-token|(^|\n)token\.txt(\n|$)|keystore-password') { Write-Host 'Refusing to upload: a secret file would be included.' -ForegroundColor Red; return $false }
+    if ($tracked -match '\.jks|\.pem|\.keystore|\.server-secret|notify-token|keystore-password') { Write-Host 'Refusing to upload: a secret file would be included.' -ForegroundColor Red; return $false }
     if ((Invoke-GitC -c user.name=NexaDesk -c user.email=release@nexadesk.local commit -m 'Source for cloud build') -ne 0) { Write-Host "git commit failed:`n$($script:cwOut -join "`n")" -ForegroundColor Red; return $false }
     if ((Invoke-GitC push origin HEAD:main) -ne 0) { Write-Host "git push failed:`n$($script:cwOut -join "`n")" -ForegroundColor Red; return $false }
     Write-Host '  source code sent to GitHub' -ForegroundColor DarkGray

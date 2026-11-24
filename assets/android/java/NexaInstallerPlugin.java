@@ -1,25 +1,20 @@
 package com.nexadesk.app;
 
-import android.Manifest;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageInstaller;
-import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
-import android.security.keystore.KeyGenParameterSpec;
-import android.security.keystore.KeyProperties;
 import android.provider.Settings;
-import android.util.Base64;
+import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSObject;
-import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import com.getcapacitor.annotation.Permission;
-import com.getcapacitor.annotation.PermissionCallback;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -28,153 +23,26 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
-import java.security.KeyStore;
-import javax.crypto.Cipher;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.GCMParameterSpec;
 
 /**
  * In-app update of the APK: downloads the new APK into the app's private cache (no file is left in Downloads), checks its SHA-256 against the
  * signed manifest, hands it to Android's PackageInstaller and deletes it. Android still shows its own "Update" confirmation, except where the
  * system allows a silent update (Android 12+ for an app that was installed by this installer).
  */
-@CapacitorPlugin(name = "NexaInstaller", permissions = {
-  @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS })
-})
+@CapacitorPlugin(name = "NexaInstaller")
 public class NexaInstallerPlugin extends Plugin {
   private static final String ACTION = "com.nexadesk.app.INSTALL_RESULT";
-  private static final String STORE = "nexadesk_secure";
-  private static final String KEY_ALIAS = "nexadesk_secure_store_v1";
-  private static volatile NexaInstallerPlugin activePlugin;
+  private BroadcastReceiver receiver;
   private volatile boolean busy = false;
-
-  @Override
-  public void load() {
-    super.load();
-    activePlugin = this;
-  }
-
-  static void onInstallResult(Intent intent) {
-    NexaInstallerPlugin plugin = activePlugin;
-    if (plugin == null) return;
-    int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999);
-    plugin.busy = false;
-    JSObject r = new JSObject();
-    r.put("status", status);
-    String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-    r.put("message", msg == null ? "" : msg);
-    r.put("success", status == PackageInstaller.STATUS_SUCCESS);
-    plugin.notifyListeners("result", r);
-  }
 
   private boolean allowed() {
     return Build.VERSION.SDK_INT < 26 || getContext().getPackageManager().canRequestPackageInstalls();
-  }
-
-  private SecretKey secureKey() throws Exception {
-    KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
-    ks.load(null);
-    if (ks.containsAlias(KEY_ALIAS)) return (SecretKey) ks.getKey(KEY_ALIAS, null);
-    KeyGenerator gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
-    gen.init(new KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
-      .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-      .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-      .setRandomizedEncryptionRequired(true)
-      .build());
-    return gen.generateKey();
-  }
-
-  private String readSecure(String name) throws Exception {
-    SharedPreferences prefs = getContext().getSharedPreferences(STORE, Context.MODE_PRIVATE);
-    String encoded = prefs.getString("v_" + name, "");
-    if (encoded.isEmpty()) return "";
-    byte[] all = Base64.decode(encoded, Base64.NO_WRAP);
-    byte[] iv = java.util.Arrays.copyOfRange(all, 0, 12);
-    byte[] ciphertext = java.util.Arrays.copyOfRange(all, 12, all.length);
-    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-    cipher.init(Cipher.DECRYPT_MODE, secureKey(), new GCMParameterSpec(128, iv));
-    return new String(cipher.doFinal(ciphertext), java.nio.charset.StandardCharsets.UTF_8);
-  }
-
-  private void writeSecure(String name, String value) throws Exception {
-    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-    cipher.init(Cipher.ENCRYPT_MODE, secureKey());
-    byte[] iv = cipher.getIV();
-    byte[] ciphertext = cipher.doFinal(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    byte[] all = new byte[iv.length + ciphertext.length];
-    System.arraycopy(iv, 0, all, 0, iv.length);
-    System.arraycopy(ciphertext, 0, all, iv.length, ciphertext.length);
-    boolean saved = getContext().getSharedPreferences(STORE, Context.MODE_PRIVATE).edit()
-      .putString("v_" + name, Base64.encodeToString(all, Base64.NO_WRAP)).commit();
-    if (!saved) throw new Exception("secure storage write failed");
-  }
-
-  private boolean validSecureName(String name) {
-    return "deviceKey".equals(name) || "permanentPassword".equals(name) || "trustedPeers".equals(name);
-  }
-
-  @PluginMethod
-  public void getSecure(PluginCall call) {
-    String name = call.getString("key");
-    if (name == null) name = "";
-    if (!validSecureName(name)) { call.reject("unsupported secure value"); return; }
-    try {
-      JSObject r = new JSObject();
-      r.put("value", readSecure(name));
-      call.resolve(r);
-    } catch (Exception e) { call.reject("secure storage unavailable", e); }
-  }
-
-  @PluginMethod
-  public void setSecure(PluginCall call) {
-    String name = call.getString("key"), value = call.getString("value");
-    if (name == null) name = "";
-    if (value == null) value = "";
-    int limit = "trustedPeers".equals(name) ? 12000 : 256;
-    if (!validSecureName(name) || value.length() > limit) { call.reject("unsupported secure value"); return; }
-    try {
-      writeSecure(name, value);
-      call.resolve();
-    } catch (Exception e) { call.reject("secure storage unavailable", e); }
   }
 
   @PluginMethod
   public void canInstall(PluginCall call) {
     JSObject r = new JSObject();
     r.put("allowed", allowed());
-    call.resolve(r);
-  }
-
-  @PluginMethod
-  public void prepareUpdateNotifications(PluginCall call) {
-    if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) {
-      JSObject r = new JSObject();
-      r.put("allowed", true);
-      call.resolve(r);
-      return;
-    }
-    requestPermissionForAlias("notifications", call, "notificationPermissionResult");
-  }
-
-  @PermissionCallback
-  private void notificationPermissionResult(PluginCall call) {
-    JSObject r = new JSObject();
-    r.put("allowed", getPermissionState("notifications") == PermissionState.GRANTED);
-    call.resolve(r);
-  }
-
-  @PluginMethod
-  public void getAppVersion(PluginCall call) {
-    JSObject r = new JSObject();
-    try {
-      String version = getContext().getPackageManager()
-        .getPackageInfo(getContext().getPackageName(), 0).versionName;
-      r.put("version", version == null ? "" : version);
-    } catch (Exception e) {
-      call.reject("could not read installed app version", e);
-      return;
-    }
     call.resolve(r);
   }
 
@@ -189,6 +57,33 @@ public class NexaInstallerPlugin extends Plugin {
     } catch (Exception e) {
       call.reject("settings");
     }
+  }
+
+  private void ensureReceiver() {
+    if (receiver != null) return;
+    receiver = new BroadcastReceiver() {
+      @Override
+      @SuppressWarnings("deprecation")
+      public void onReceive(Context c, Intent intent) {
+        int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999);
+        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+          Intent confirm = (Intent) intent.getParcelableExtra(Intent.EXTRA_INTENT);
+          if (confirm != null) {
+            confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try { c.startActivity(confirm); } catch (Exception ignored) { }
+          }
+          return;
+        }
+        busy = false;
+        JSObject r = new JSObject();
+        r.put("status", status);
+        String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+        r.put("message", msg == null ? "" : msg);
+        r.put("success", status == PackageInstaller.STATUS_SUCCESS);
+        notifyListeners("result", r);
+      }
+    };
+    ContextCompat.registerReceiver(getContext(), receiver, new IntentFilter(ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
   }
 
   private void progress(long got, long total) {
@@ -206,6 +101,7 @@ public class NexaInstallerPlugin extends Plugin {
     if (!allowed()) { call.reject("permission"); return; }
     if (busy) { call.reject("busy"); return; }
     busy = true;
+    ensureReceiver();
     final Context ctx = getContext();
     new Thread(new Runnable() {
       @Override
@@ -261,7 +157,7 @@ public class NexaInstallerPlugin extends Plugin {
               fin.close();
             }
             Intent cb = new Intent(ACTION);
-            cb.setClass(ctx, NexaInstallResultReceiver.class);
+            cb.setPackage(ctx.getPackageName());
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
             PendingIntent pend = PendingIntent.getBroadcast(ctx, id, cb, flags);

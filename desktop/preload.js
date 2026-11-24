@@ -13,15 +13,6 @@ contextBridge.exposeInMainWorld('nexa', {
     get: () => ipcRenderer.invoke('nx-secret-get'),
     set: v => ipcRenderer.invoke('nx-secret-set', v)
   },
-  identity: {
-    available: process.platform === 'win32',
-    get: () => ipcRenderer.invoke('nx-identity-get'),
-    set: v => ipcRenderer.invoke('nx-identity-set', v)
-  },
-  security: {
-    getTrusted: () => ipcRenderer.invoke('nx-trusted-get'),
-    setTrusted: v => ipcRenderer.invoke('nx-trusted-set', v)
-  },
   power: o => ipcRenderer.invoke('nx-power', o),
   nativeVersion: () => ipcRenderer.invoke('nx-native-version'),
   nativeInstall: o => ipcRenderer.invoke('nx-native-install', o),

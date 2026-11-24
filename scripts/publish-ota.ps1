@@ -1,17 +1,13 @@
-# Publishes a signed OTA bundle and Android APK to Cloudflare, optionally mirrors source and installers to GitHub,
-# then pings online devices. GitHub login is not required for Android updates.
+# Publishes a web-layer OTA update to GitHub: ota/update.json + ota/www-<version>.zip (old packages are erased),
+# syncs the source code, updates the server, then pings every online device so they update immediately.
 param([switch]$NoBump, [switch]$Force, [switch]$WithPortable, [switch]$RetryUpload, [string]$AppKey = '', [string]$RecoveryKey = '', [string]$CloudSha = '')   # -CloudSha: SHA256 of the Setup built on GitHub (set by release-all.ps1)   # -RecoveryKey <file>: publish with the offline recovery key (daily key lost)   # -AppKey <id|none>: legacy bridge for apps installed before signing was removed
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\common.ps1"
-$repoSlug = Resolve-GitHubRepo $root
-$repoUrl = if ($repoSlug) { "https://github.com/$repoSlug.git" } else { '' }
-$githubReady = $false
-if ($repoSlug -and (Get-Command git.exe -ErrorAction SilentlyContinue) -and (Get-Command gh.exe -ErrorAction SilentlyContinue)) {
-  $ErrorActionPreference = 'Continue'; & gh.exe auth status *> $null; $githubReady = ($LASTEXITCODE -eq 0); $ErrorActionPreference = 'Stop'
-}
-if (-not $githubReady) { Write-Host 'GitHub mirror skipped; Cloudflare will serve the Android update directly.' -ForegroundColor Yellow }
-if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { Write-Host 'Git is unavailable; GitHub source sync will be skipped.' -ForegroundColor Yellow }
+$repoSlug = Resolve-GitHubRepo $root -Create
+if (-not $repoSlug) { throw 'No GitHub repository: run  gh auth login  first (or put owner/name into github-repo.txt).' }
+$repoUrl = "https://github.com/$repoSlug.git"
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required: https://git-scm.com/download/win' }
 function Invoke-Git { $ErrorActionPreference = 'Continue'; & git.exe @args; if ($LASTEXITCODE) { throw "git $($args -join ' ') failed" } }
 # gh.exe (GitHub CLI) with stderr captured; returns its exit code. Output is kept in $script:ghOut.
 function Invoke-Gh { $ErrorActionPreference = 'Continue'; $script:ghOut = & gh.exe @args 2>&1; return $LASTEXITCODE }
@@ -94,106 +90,83 @@ $haveSetup = (Test-Path (Join-Path $outDir $setupName)) -or [bool]$CloudSha; $ha
 # Installers for in-app updates are served from the release host (release-host.txt, R2) or - when that file is missing - from the GitHub 'ota' release,
 # which only works while the repository is public (anonymous downloads).
 $useGh = $false
-if ($haveSetup -and -not (Test-Path $relFile) -and $githubReady) {
+if (($haveSetup -or $haveApk) -and -not (Test-Path $relFile)) {
   $ErrorActionPreference = 'Continue'; $vis = ([string](& gh.exe repo view $repoSlug --json visibility --jq .visibility 2>$null)).Trim(); $ErrorActionPreference = 'Stop'
   if ($vis -eq 'PUBLIC') { $useGh = $true; Write-Host "Installers will be offered from the public GitHub release of $repoSlug." -ForegroundColor DarkGray }
-  else { Write-Host "Windows installer update is not hosted (no release-host.txt and $repoSlug is not public); keeping the previous Windows installer link." -ForegroundColor Yellow }
+  else { Write-Host "Note: installers are NOT offered for in-app updates (no release-host.txt, and $repoSlug is private). Copy release-host.txt from your other PC, or: gh repo edit $repoSlug --visibility public --accept-visibility-change-consequences" -ForegroundColor Yellow }
 }
-if ($haveSetup -and -not (Test-Path $relFile) -and -not $useGh) { $haveSetup = $false }
-if ($haveSetup -or $haveApk) {
-  $winVer = if ($haveSetup) { $ver } elseif ($liveNow.native.version) { $liveNow.native.version } else { $ver }
-  $native = [ordered]@{ version = $winVer }
-  if ($haveSetup) {
-    $rh = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim().TrimEnd('/') } else { "https://github.com/$repoSlug/releases/download/ota" }
-    $file = Join-Path $outDir $setupName
-    $h = if ($CloudSha) { $CloudSha.ToLower() } else { (Get-FileHash $file -Algorithm SHA256).Hash.ToLower() }
-    $native.windows = [ordered]@{ url = "$rh/$setupName"; sha256 = $h }
-    if (Test-Path $relFile) {
-      Push-Location (Join-Path $root 'cloudflare')
-      try { & npx wrangler r2 object put "nexadesk-releases/$setupName" --file $file --remote; $code = $LASTEXITCODE } finally { Pop-Location }
-      if ($code) { throw "Upload of $setupName to the release host failed" }
-    }
-  } elseif ($liveNow.native.windows) { $native.windows = $liveNow.native.windows }
-  if ($haveApk) {
-    $file = Join-Path $outDir $apkName
-    $h = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
-    $native.android = [ordered]@{ url = "$httpBase/$apkName"; sha256 = $h; version = $ver; minUpdaterVersion = '1.0.124' }
-  } elseif ($liveNow.native.android) { $native.android = $liveNow.native.android }
+if (($haveSetup -or $haveApk) -and ((Test-Path $relFile) -or $useGh)) {
+  $rh = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim().TrimEnd('/') } else { "https://github.com/$repoSlug/releases/download/ota" }
+  $native = [ordered]@{ version = $ver }
+  foreach ($item in @(@('windows', $setupName, $haveSetup), @('android', $apkName, $haveApk))) {
+    if (-not $item[2]) { continue }
+    $file = Join-Path $outDir $item[1]
+    $h = if ($CloudSha -and $item[0] -eq 'windows') { $CloudSha.ToLower() } else { (Get-FileHash $file -Algorithm SHA256).Hash.ToLower() }
+    if (-not (Test-Path $relFile)) { $native[$item[0]] = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }; continue }   # GitHub release: uploaded by the release step below
+    Push-Location (Join-Path $root 'cloudflare')
+    try { & npx wrangler r2 object put "nexadesk-releases/$($item[1])" --file $file --remote; $code = $LASTEXITCODE } finally { Pop-Location }
+    if ($code) { throw "Upload of $($item[1]) to the release host failed" }
+    $native[$item[0]] = [ordered]@{ url = "$rh/$($item[1])"; sha256 = $h }
+  }
 }
 if (-not $native -and $liveNow -and $liveNow.native) { $native = $liveNow.native; Write-Host "Keeping the app-installer info of v$($native.version) in the manifest (no new installers in this run)." -ForegroundColor DarkGray }
-$mirrors = if ($githubReady -and $repoSlug) { [ordered]@{ web = "https://raw.githubusercontent.com/$repoSlug/HEAD/ota/"; app = "https://github.com/$repoSlug/releases/download/ota/" } } else { [ordered]@{ web = ''; app = '' } }
-$manifest = [ordered]@{ version = $ver; bundle = "www-$ver.zip"; sha256 = $sha; server = $server; released = (Get-Date).ToUniversalTime().ToString('o'); mirrors = $mirrors; trust = @($keys.Trust); keyId = "$legacyId"; force = [bool]$Force; native = $native } | ConvertTo-Json -Depth 5
+$manifest = [ordered]@{ version = $ver; bundle = "www-$ver.zip"; sha256 = $sha; server = $server; released = (Get-Date).ToUniversalTime().ToString('o'); mirrors = [ordered]@{ web = "https://raw.githubusercontent.com/$repoSlug/HEAD/ota/"; app = "https://github.com/$repoSlug/releases/download/ota/" }; trust = @($keys.Trust); keyId = "$legacyId"; force = [bool]$Force; native = $native } | ConvertTo-Json -Depth 5
 $manifestPath = Join-Path $build 'update.json'
 [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding $false))
 $sigPath = Join-Path $build 'update.sig'; $sig2Path = Join-Path $build 'update.sig2'
 & node "$PSScriptRoot\sign-manifest.js" sign2 $manifestPath $RecoveryKey; if ($LASTEXITCODE) { throw 'signing failed' }
 if ($legacyId) { & node "$PSScriptRoot\sign-manifest.js" sign $manifestPath $legacyId; if ($LASTEXITCODE) { throw 'legacy signing failed' } }
 
-# ---- 2) Optional GitHub source mirror ----
-$relSha = 'main'
-$githubSourceReady = $false
-if ($githubReady) {
-  try {
-    Write-Host "Syncing the optional GitHub mirror for v$ver..." -ForegroundColor Cyan
-    $clone = Join-Path $build 'repo'
-    [void](Invoke-Gh auth setup-git)
-    Invoke-Git clone --depth 1 $repoUrl $clone
-    $ota = Join-Path $clone 'ota'; New-Item -ItemType Directory -Force $ota | Out-Null
-    Get-ChildItem $ota -File | Remove-Item -Force
-    Copy-Item $zip $ota; Copy-Item $manifestPath $ota; Copy-Item $sig2Path $ota; if (Test-Path $sigPath) { Copy-Item $sigPath $ota }
-    $skip = @('.git', 'node_modules', 'build', 'output', 'signing', '.wrangler') + @('desktop\www', 'android-app\www', 'android-app\android', 'ota' | ForEach-Object { Join-Path $root $_ })
-    robocopy $root $clone /E /XD @skip /XF .server-secret server-url.txt notify-token.txt token.txt config.json keystore-password.txt *.jks *.keystore *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
-    if ($LASTEXITCODE -ge 8) { throw 'Copying source files failed' }
-    Push-Location $clone
-    try {
-      foreach ($f in @(& git.exe ls-files)) {
-        if ($f -like 'ota/*' -or $f -like '.git*') { continue }
-        if (-not (Test-Path (Join-Path $root $f))) { Invoke-Git rm -q $f }
-      }
-      Invoke-Git add -A
-      $tracked = (& git.exe ls-files) -join "`n"
-      if ($tracked -match '\.jks|\.pem|\.keystore|\.server-secret|notify-token|(^|\n)token\.txt(\n|$)|keystore-password') { throw 'Refusing to publish: a secret file would be uploaded.' }
-      Invoke-Git -c user.name=NexaDesk -c user.email=release@nexadesk.local commit -m "Release v$ver"
-      Invoke-Git push origin HEAD:main
-      $relSha = (& git.exe rev-parse HEAD).Trim()
-      $githubSourceReady = $true
-    } finally { Pop-Location }
-  } catch {
-    Write-Host "GitHub source mirror was skipped: $($_.Exception.Message). The signed Cloudflare release will continue." -ForegroundColor Yellow
-    if ($clone -and (Test-Path -LiteralPath $clone)) { Remove-Item -LiteralPath $clone -Recurse -Force }
+# ---- 2) GitHub: erase old packages, add new, sync source ----
+Write-Host "Publishing v$ver to GitHub..." -ForegroundColor Cyan
+$clone = Join-Path $build 'repo'
+[void](Invoke-Gh auth setup-git)   # lets git use the GitHub CLI login (private repositories)
+Invoke-Git clone --depth 1 $repoUrl $clone
+$ota = Join-Path $clone 'ota'; New-Item -ItemType Directory -Force $ota | Out-Null
+Get-ChildItem $ota -File | Remove-Item -Force
+Copy-Item $zip $ota; Copy-Item $manifestPath $ota; Copy-Item $sig2Path $ota; if (Test-Path $sigPath) { Copy-Item $sigPath $ota }
+$skip = @('.git', 'node_modules', 'build', 'output', 'signing', '.wrangler') + @('desktop\www', 'android-app\www', 'android-app\android', 'ota' | ForEach-Object { Join-Path $root $_ })
+robocopy $root $clone /E /XD @skip /XF .server-secret server-url.txt notify-token.txt config.json keystore-password.txt *.jks *.keystore *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw 'Copying source files failed' }
+# mirror: files you deleted from the project are removed from the repo too (ota/ is managed separately)
+Push-Location $clone
+try {
+  foreach ($f in @(& git.exe ls-files)) {
+    if ($f -like 'ota/*' -or $f -like '.git*') { continue }
+    if (-not (Test-Path (Join-Path $root $f))) { Invoke-Git rm -q $f }
   }
-} else { Write-Host 'GitHub source/release mirror skipped; the signed update will still be published to Cloudflare.' -ForegroundColor Yellow }
+} finally { Pop-Location }
+Push-Location $clone
+try {
+  Invoke-Git add -A
+  $tracked = (& git.exe ls-files) -join "`n"
+  if ($tracked -match '\.jks|\.pem|\.keystore|\.server-secret|notify-token|keystore-password') { throw 'Refusing to publish: a secret file would be uploaded.' }
+  Invoke-Git -c user.name=NexaDesk -c user.email=release@nexadesk.local commit -m "Release v$ver"
+  Invoke-Git push origin HEAD:main
+  $relSha = (& git.exe rev-parse HEAD).Trim()
+} finally { Pop-Location }
 
-# If source mirroring failed, do not advertise its stale OTA bundle as a download fallback.
-if (-not $githubSourceReady -and $githubReady) {
-  $manifestObject = ConvertFrom-Json $manifest
-  $manifestObject.mirrors.web = ''
-  $manifest = $manifestObject | ConvertTo-Json -Depth 5
-  [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding $false))
-  & node "$PSScriptRoot\sign-manifest.js" sign2 $manifestPath $RecoveryKey; if ($LASTEXITCODE) { throw 're-signing manifest after GitHub mirror skip failed' }
-  if ($legacyId) { & node "$PSScriptRoot\sign-manifest.js" sign $manifestPath $legacyId; if ($LASTEXITCODE) { throw 'legacy re-signing after GitHub mirror skip failed' } }
-}
-
-# Keep the local ota\ folder current for diagnostics and manual release review.
+# keep the local ota\ folder identical to what was published (it was going stale before)
 $localOta = Join-Path $root 'ota'; New-Item -ItemType Directory -Force $localOta | Out-Null
 Get-ChildItem $localOta -File | Remove-Item -Force
-Copy-Item @($zip, $manifestPath, $sig2Path) $localOta -Force; if (Test-Path $sigPath) { Copy-Item $sigPath $localOta -Force }
+Copy-Item (Join-Path $ota '*') $localOta -Force
 
-# ---- 3) Worker assets: preserve the current APK on quick web-only updates ----
+# ---- 2a) the update files go to the Worker (static assets, deployed with the server in step 3) ----
 $pubDir = Join-Path $root 'cloudflare\public'; New-Item -ItemType Directory -Force $pubDir | Out-Null
-if ($haveApk) { $keepApk = $apkName }
-elseif ($liveNow.native.android.version) { $keepApk = 'NexaDesk-' + $liveNow.native.android.version + '.apk' }
-else { $keepApk = '' }
-Get-ChildItem $pubDir -File | Where-Object { $_.Name -ne 'robots.txt' -and $_.Name -ne $keepApk } | Remove-Item -Force
+Get-ChildItem $pubDir -File | Where-Object { $_.Name -ne 'robots.txt' } | Remove-Item -Force
 Copy-Item @($zip, $manifestPath, $sig2Path) $pubDir -Force; if (Test-Path $sigPath) { Copy-Item $sigPath $pubDir -Force }
-if ($haveApk) { Copy-Item (Join-Path $outDir $apkName) (Join-Path $pubDir $apkName) -Force }
 
-# ---- 4) Optional GitHub release mirror ----
-if ($githubReady) { Publish-OtaRelease $ver $relSha (Join-Path $root 'output') }
+# ---- 2b) GitHub release 'ota' (installers + APK of this version) ----
+Publish-OtaRelease $ver $relSha (Join-Path $root 'output')
 
-# ---- 5) Deploy Worker code + signed assets using the narrowly scoped token ----
-& "$PSScriptRoot\deploy-cloudflare-narrow.ps1"
-if ($LASTEXITCODE) { throw 'Cloudflare Worker deployment failed.' }
+# ---- 3) server code (keeps /notify and protocol in sync) ----
+Write-Host 'Updating server...' -ForegroundColor Cyan
+Push-Location (Join-Path $root 'cloudflare')
+try {
+  if (-not (Test-Path node_modules)) { Install-Packages (Get-Location).Path }
+  cmd /c "npx wrangler deploy 2>&1" | Out-Null
+  if ($LASTEXITCODE) { Write-Host 'Server update failed (use option 5 to repair).' -ForegroundColor Yellow }
+} finally { Pop-Location }
 
 # ---- 4) wait until GitHub serves it, then tell every online device to update NOW ----
 $live = $false
