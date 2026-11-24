@@ -1,9 +1,9 @@
 {
-    "version":  "1.0.129",
-    "bundle":  "www-1.0.129.zip",
-    "sha256":  "83047bf717912226a0559706d5ec7562866c76a77f719475de5e9040418c361a",
+    "version":  "1.0.130",
+    "bundle":  "www-1.0.130.zip",
+    "sha256":  "b5c360927f355337e63c0201e2a32db9b89fc00285391fb2997364e6521836ec",
     "server":  "wss://nexadesk-signaling.papayasds.workers.dev",
-    "released":  "2026-11-24T00:38:07.7238218Z",
+    "released":  "2026-11-24T01:30:45.2441076Z",
     "mirrors":  {
                     "web":  "https://raw.githubusercontent.com/papayasds-ai/Nexa-Remote-Desktop/HEAD/ota/",
                     "app":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/"
@@ -15,15 +15,15 @@
     "keyId":  "",
     "force":  true,
     "native":  {
-                   "version":  "1.0.129",
+                   "version":  "1.0.130",
                    "windows":  {
-                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.129.exe",
-                                   "sha256":  "f371fa4d898e6acf804f620a5f65e3d2282a6da8aa3c36e112d8acc7de287b0c"
+                                   "url":  "https://github.com/papayasds-ai/Nexa-Remote-Desktop/releases/download/ota/NexaDesk-Setup-1.0.130.exe",
+                                   "sha256":  "a6826f9332bea5a56939f6a7a844713c988f6484ef9c876fc00448c655e4a946"
                                },
                    "android":  {
-                                   "url":  "https://nexadesk-signaling.papayasds.workers.dev/NexaDesk-1.0.129.apk",
-                                   "sha256":  "806ecdbd7ce25ea3a794d461b7184df607c25bf6c7fe4c65f0a7717984e383db",
-                                   "version":  "1.0.129",
+                                   "url":  "https://nexadesk-signaling.papayasds.workers.dev/NexaDesk-1.0.130.apk",
+                                   "sha256":  "3878432ed65e7b1f790c356fd55c261533f2aa29f920354e1bd5cedd756a0107",
+                                   "version":  "1.0.130",
                                    "minUpdaterVersion":  "1.0.124"
                                }
                }
